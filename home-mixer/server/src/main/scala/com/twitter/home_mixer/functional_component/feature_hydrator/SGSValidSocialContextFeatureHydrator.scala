@@ -27,7 +27,8 @@ import javax.inject.Singleton
 @Singleton
 class SGSValidSocialContextFeatureHydrator @Inject() (
   socialGraph: SocialGraph)
-    extends BulkCandidateFeatureHydrator[PipelineQuery, TweetCandidate] {
+    extends BulkCandidateFeatureHydrator[PipelineQuery, TweetCandidate]
+    with WithDefaultFeatureMap {
 
   override val identifier: FeatureHydratorIdentifier =
     FeatureHydratorIdentifier("SGSValidSocialContext")
@@ -35,6 +36,13 @@ class SGSValidSocialContextFeatureHydrator @Inject() (
   override val features: Set[Feature[_, _]] = Set(
     SGSValidFollowedByUserIdsFeature,
     SGSValidLikedByUserIdsFeature
+  )
+
+  override val defaultFeatureMap: FeatureMap = FeatureMap(
+    SGSValidFollowedByUserIdsFeature,
+    Seq.empty,
+    SGSValidLikedByUserIdsFeature,
+    Seq.empty
   )
 
   private val MaxCountUsers = 10

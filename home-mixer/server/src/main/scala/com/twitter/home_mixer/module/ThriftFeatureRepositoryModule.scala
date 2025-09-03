@@ -10,38 +10,25 @@ import com.twitter.graph_feature_service.{thriftscala => gfs}
 import com.twitter.home_mixer.param.HomeMixerInjectionNames.EarlybirdRepository
 import com.twitter.home_mixer.param.HomeMixerInjectionNames.GraphTwoHopRepository
 import com.twitter.home_mixer.param.HomeMixerInjectionNames.InterestsThriftServiceClient
-import com.twitter.home_mixer.param.HomeMixerInjectionNames.TweetypieContentRepository
 import com.twitter.home_mixer.param.HomeMixerInjectionNames.UserFollowedTopicIdsRepository
 import com.twitter.home_mixer.param.HomeMixerInjectionNames.UtegSocialProofRepository
 import com.twitter.home_mixer.util.earlybird.EarlybirdRequestUtil
-import com.twitter.home_mixer.util.tweetypie.RequestFields
 import com.twitter.inject.TwitterModule
 import com.twitter.interests.{thriftscala => int}
-import com.twitter.product_mixer.shared_library.memcached_client.MemcachedClientBuilder
 import com.twitter.product_mixer.shared_library.thrift_client.FinagleThriftClientBuilder
 import com.twitter.product_mixer.shared_library.thrift_client.Idempotent
 import com.twitter.recos.recos_common.{thriftscala => rc}
 import com.twitter.recos.user_tweet_entity_graph.{thriftscala => uteg}
 import com.twitter.search.earlybird.{thriftscala => eb}
-import com.twitter.servo.cache.Cached
-import com.twitter.servo.cache.CachedSerializer
-import com.twitter.servo.cache.FinagleMemcacheFactory
-import com.twitter.servo.cache.MemcacheCacheFactory
-import com.twitter.servo.cache.NonLockingCache
-import com.twitter.servo.cache.ThriftSerializer
+import com.twitter.servo.cache._
 import com.twitter.servo.keyvalue.KeyValueResultBuilder
-import com.twitter.servo.repository.CachingKeyValueRepository
 import com.twitter.servo.repository.ChunkingStrategy
 import com.twitter.servo.repository.KeyValueRepository
 import com.twitter.servo.repository.KeyValueResult
-import com.twitter.servo.repository.keysAsQuery
-import com.twitter.spam.rtf.{thriftscala => sp}
-import com.twitter.tweetypie.{thriftscala => tp}
 import com.twitter.util.Future
 import com.twitter.util.Return
 import javax.inject.Named
 import javax.inject.Singleton
-import org.apache.thrift.protocol.TCompactProtocol
 
 object ThriftFeatureRepositoryModule extends TwitterModule {
 
@@ -150,82 +137,6 @@ object ThriftFeatureRepositoryModule extends TwitterModule {
 
   @Provides
   @Singleton
-  @Named(TweetypieContentRepository)
-  def providesTweetypieContentRepository(
-    clientId: ClientId,
-    serviceIdentifier: ServiceIdentifier,
-    statsReceiver: StatsReceiver
-  ): KeyValueRepository[Seq[Long], Long, tp.Tweet] = {
-    val client = FinagleThriftClientBuilder
-      .buildFinagleMethodPerEndpoint[
-        tp.TweetService.ServicePerEndpoint,
-        tp.TweetService.MethodPerEndpoint](
-        serviceIdentifier = serviceIdentifier,
-        clientId = clientId,
-        dest = "/s/tweetypie/tweetypie",
-        label = "tweetypie-content-repo",
-        statsReceiver = statsReceiver,
-        idempotency = Idempotent(1.percent),
-        timeoutPerRequest = 300.milliseconds,
-        timeoutTotal = 500.milliseconds
-      )
-
-    def lookup(tweetIds: Seq[Long]): Future[Seq[Option[tp.Tweet]]] = {
-      val getTweetFieldsOptions = tp.GetTweetFieldsOptions(
-        tweetIncludes = RequestFields.ContentFields,
-        includeRetweetedTweet = false,
-        includeQuotedTweet = false,
-        forUserId = None,
-        safetyLevel = Some(sp.SafetyLevel.FilterNone),
-        visibilityPolicy = tp.TweetVisibilityPolicy.NoFiltering
-      )
-
-      val request = tp.GetTweetFieldsRequest(tweetIds = tweetIds, options = getTweetFieldsOptions)
-
-      client.getTweetFields(request).map { results =>
-        results.map {
-          case tp.GetTweetFieldsResult(_, tp.TweetFieldsResultState.Found(found), _, _) =>
-            Some(found.tweet)
-          case _ => None
-        }
-      }
-    }
-
-    val keyValueRepository = toRepositoryBatch(lookup, chunkSize = 20)
-
-    val cacheClient = MemcachedClientBuilder.buildRawMemcachedClient(
-      numTries = 1,
-      numConnections = 1,
-      requestTimeout = 200.milliseconds,
-      globalTimeout = 200.milliseconds,
-      connectTimeout = 200.milliseconds,
-      acquisitionTimeout = 200.milliseconds,
-      serviceIdentifier = serviceIdentifier,
-      statsReceiver = statsReceiver
-    )
-
-    val finagleMemcacheFactory =
-      FinagleMemcacheFactory(cacheClient, "/s/cache/home_content_features:twemcaches")
-    val cacheValueTransformer =
-      new ThriftSerializer[tp.Tweet](tp.Tweet, new TCompactProtocol.Factory())
-    val cachedSerializer = CachedSerializer.binary(cacheValueTransformer)
-
-    val cache = MemcacheCacheFactory(
-      memcache = finagleMemcacheFactory(),
-      ttl = 48.hours
-    )[Long, Cached[tp.Tweet]](cachedSerializer)
-
-    val lockingCache = new NonLockingCache(cache)
-    val cachedKeyValueRepository = new CachingKeyValueRepository(
-      keyValueRepository,
-      lockingCache,
-      keysAsQuery[Long]
-    )
-    cachedKeyValueRepository
-  }
-
-  @Provides
-  @Singleton
   @Named(GraphTwoHopRepository)
   def providesGraphTwoHopRepository(
     clientId: ClientId,
@@ -284,7 +195,7 @@ object ThriftFeatureRepositoryModule extends TwitterModule {
         tweetIds = Some(tweetIds),
         clientId = Some(clientId.name),
         authorScoreMap = None,
-        tensorflowModel = Some("timelines_rectweet_replica")
+        tensorflowModel = Some("timelines_unified_prod")
       )
 
       client

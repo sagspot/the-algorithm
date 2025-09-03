@@ -1,15 +1,16 @@
 package com.twitter.home_mixer.product.scored_tweets.candidate_pipeline
 
-import com.twitter.home_mixer.product.scored_tweets.feature_hydrator.TweetypieStaticEntitiesFeatureHydrator
+import com.twitter.home_mixer.functional_component.feature_hydrator.ListIdsFeature
+import com.twitter.home_mixer.functional_component.feature_hydrator.TweetEntityServiceFeatureHydrator
 import com.twitter.home_mixer.functional_component.filter.ReplyFilter
 import com.twitter.home_mixer.functional_component.filter.RetweetFilter
+import com.twitter.home_mixer.model.HomeFeatures.CachedScoredTweetsFeature
+import com.twitter.home_mixer.product.scored_tweets.candidate_source.ListTweet
 import com.twitter.home_mixer.product.scored_tweets.candidate_source.ListsCandidateSource
-import com.twitter.home_mixer.product.scored_tweets.feature_hydrator.ListIdsFeature
-import com.twitter.home_mixer.product.scored_tweets.gate.MinCachedTweetsGate
+import com.twitter.home_mixer.product.scored_tweets.feature_hydrator.ListNameFeatureHydrator
 import com.twitter.home_mixer.product.scored_tweets.model.ScoredTweetsQuery
-import com.twitter.home_mixer.product.scored_tweets.param.ScoredTweetsParam.CachedScoredTweets
-import com.twitter.home_mixer.product.scored_tweets.param.ScoredTweetsParam.CandidatePipeline
 import com.twitter.home_mixer.product.scored_tweets.response_transformer.ScoredTweetsListsResponseFeatureTransformer
+import com.twitter.product_mixer.component_library.gate.EmptySeqFeatureGate
 import com.twitter.product_mixer.component_library.gate.NonEmptySeqFeatureGate
 import com.twitter.product_mixer.component_library.model.candidate.TweetCandidate
 import com.twitter.product_mixer.core.functional_component.candidate_source.CandidateSource
@@ -21,7 +22,6 @@ import com.twitter.product_mixer.core.functional_component.transformer.Candidate
 import com.twitter.product_mixer.core.functional_component.transformer.CandidatePipelineResultsTransformer
 import com.twitter.product_mixer.core.model.common.identifier.CandidatePipelineIdentifier
 import com.twitter.product_mixer.core.pipeline.candidate.CandidatePipelineConfig
-import com.twitter.timelines.configapi.decider.DeciderParam
 import com.twitter.timelineservice.{thriftscala => t}
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -29,11 +29,12 @@ import javax.inject.Singleton
 @Singleton
 class ScoredTweetsListsCandidatePipelineConfig @Inject() (
   listsCandidateSource: ListsCandidateSource,
-  tweetypieStaticEntitiesHydrator: TweetypieStaticEntitiesFeatureHydrator)
+  listNameFeatureHydrator: ListNameFeatureHydrator,
+  tweetEntityServiceFeatureHydrator: TweetEntityServiceFeatureHydrator)
     extends CandidatePipelineConfig[
       ScoredTweetsQuery,
       Seq[t.TimelineQuery],
-      t.Tweet,
+      ListTweet,
       TweetCandidate
     ] {
 
@@ -42,12 +43,9 @@ class ScoredTweetsListsCandidatePipelineConfig @Inject() (
 
   private val MaxTweetsToFetchPerList = 20
 
-  override val enabledDeciderParam: Option[DeciderParam[Boolean]] =
-    Some(CandidatePipeline.EnableListsParam)
-
   override val gates: Seq[Gate[ScoredTweetsQuery]] = Seq(
     NonEmptySeqFeatureGate(ListIdsFeature),
-    MinCachedTweetsGate(identifier, CachedScoredTweets.MinCachedTweetsParam)
+    EmptySeqFeatureGate(CachedScoredTweetsFeature)
   )
 
   override val queryTransformer: CandidatePipelineQueryTransformer[
@@ -66,20 +64,23 @@ class ScoredTweetsListsCandidatePipelineConfig @Inject() (
     }
   }
 
-  override def candidateSource: CandidateSource[Seq[t.TimelineQuery], t.Tweet] =
+  override def candidateSource: CandidateSource[Seq[t.TimelineQuery], ListTweet] =
     listsCandidateSource
 
   override val featuresFromCandidateSourceTransformers: Seq[
-    CandidateFeatureTransformer[t.Tweet]
+    CandidateFeatureTransformer[ListTweet]
   ] = Seq(ScoredTweetsListsResponseFeatureTransformer)
 
-  override val resultTransformer: CandidatePipelineResultsTransformer[t.Tweet, TweetCandidate] = {
-    sourceResult => TweetCandidate(id = sourceResult.statusId)
+  override val resultTransformer: CandidatePipelineResultsTransformer[ListTweet, TweetCandidate] = {
+    sourceResult => TweetCandidate(id = sourceResult.tweet.statusId)
   }
 
   override val preFilterFeatureHydrationPhase1: Seq[
     BaseCandidateFeatureHydrator[ScoredTweetsQuery, TweetCandidate, _]
-  ] = Seq(tweetypieStaticEntitiesHydrator)
+  ] = Seq(
+    listNameFeatureHydrator,
+    tweetEntityServiceFeatureHydrator,
+  )
 
   override val filters: Seq[Filter[ScoredTweetsQuery, TweetCandidate]] =
     Seq(ReplyFilter, RetweetFilter)

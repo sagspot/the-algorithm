@@ -35,7 +35,6 @@ object FeedbackFatigueScorer
   override def onlyIf(query: PipelineQuery): Boolean =
     query.features.exists(_.getOrElse(FeedbackHistoryFeature, Seq.empty).nonEmpty)
 
-  val DurationForFiltering = 14.days
   val DurationForDiscounting = 140.days
   private val ScoreMultiplierLowerBound = 0.2
   private val ScoreMultiplierUpperBound = 1.0
@@ -54,7 +53,7 @@ object FeedbackFatigueScorer
         .getOrElse(FeatureMap.empty).getOrElse(FeedbackHistoryFeature, Seq.empty)
         .filter { entry =>
           val timeSinceFeedback = query.queryTime.minus(entry.timestamp)
-          timeSinceFeedback < DurationForFiltering + DurationForDiscounting &&
+          timeSinceFeedback < DurationForDiscounting &&
           entry.feedbackType == tls.FeedbackType.SeeFewer
         }.groupBy(_.engagementType)
 
@@ -132,10 +131,9 @@ object FeedbackFatigueScorer
     val userDiscounts = mutable.Map[Long, Double]()
     feedbackEntries
       .collect {
-        case FeedbackEntry(_, _, tl.FeedbackEntity.UserId(userId), timestamp, _) =>
+        case FeedbackEntry(_, _, tl.FeedbackEntity.UserId(userId), timestamp, _, _) =>
           val timeSinceFeedback = queryTime.minus(timestamp)
-          val timeSinceDiscounting = timeSinceFeedback - DurationForFiltering
-          val multiplier = ((timeSinceDiscounting.inDays / ScoreMultiplierIncrementDurationInDays)
+          val multiplier = ((timeSinceFeedback.inDays / ScoreMultiplierIncrementDurationInDays)
             * ScoreMultiplierIncrement + ScoreMultiplierLowerBound)
           userDiscounts.update(userId, multiplier)
       }

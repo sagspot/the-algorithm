@@ -16,17 +16,10 @@ object ReplyFilter extends Filter[PipelineQuery, TweetCandidate] {
     query: PipelineQuery,
     candidates: Seq[CandidateWithFeatures[TweetCandidate]]
   ): Stitch[FilterResult[TweetCandidate]] = {
+    val (kept, removed) = candidates.partition { candidate =>
+      candidate.features.getOrElse(InReplyToTweetIdFeature, None).isEmpty
+    }
 
-    val (kept, removed) = candidates
-      .partition { candidate =>
-        candidate.features.getOrElse(InReplyToTweetIdFeature, None).isEmpty
-      }
-
-    val filterResult = FilterResult(
-      kept = kept.map(_.candidate),
-      removed = removed.map(_.candidate)
-    )
-
-    Stitch.value(filterResult)
+    Stitch.value(FilterResult(kept = kept.map(_.candidate), removed = removed.map(_.candidate)))
   }
 }

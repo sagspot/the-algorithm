@@ -1,7 +1,6 @@
 package com.twitter.home_mixer.functional_component.decorator.urt.builder
 
 import com.twitter.home_mixer.model.HomeFeatures.ScreenNamesFeature
-import com.twitter.home_mixer.model.HomeFeatures.SuggestTypeFeature
 import com.twitter.home_mixer.product.following.model.HomeMixerExternalStrings
 import com.twitter.home_mixer.util.CandidatesUtil
 import com.twitter.product_mixer.core.feature.featuremap.FeatureMap
@@ -25,8 +24,7 @@ case class AuthorChildFeedbackActionBuilder @Inject() (
         promptExternalString = externalStrings.showFewerTweetsString,
         confirmationExternalString = externalStrings.showFewerTweetsConfirmationString,
         engagementType = t.FeedbackEngagementType.Tweet,
-        stringCenter = stringCenter,
-        injectionType = candidateFeatures.getOrElse(SuggestTypeFeature, None)
+        stringCenter = stringCenter
       )
     }
   }

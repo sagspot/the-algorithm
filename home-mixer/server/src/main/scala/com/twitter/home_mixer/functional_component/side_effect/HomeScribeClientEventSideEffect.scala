@@ -21,7 +21,9 @@ case class HomeScribeClientEventSideEffect(
   injectedTweetsCandidatePipelineIdentifiers: Seq[CandidatePipelineIdentifier],
   adsCandidatePipelineIdentifier: Option[CandidatePipelineIdentifier] = None,
   whoToFollowCandidatePipelineIdentifier: Option[CandidatePipelineIdentifier] = None,
-  whoToSubscribeCandidatePipelineIdentifier: Option[CandidatePipelineIdentifier] = None)
+  whoToSubscribeCandidatePipelineIdentifier: Option[CandidatePipelineIdentifier] = None,
+  forYouCommunitiesToJoinCandidatePipelineIdentifier: Option[CandidatePipelineIdentifier] = None,
+  forYouRelevancePromptCandidatePipelineIdentifier: Option[CandidatePipelineIdentifier] = None)
     extends ScribeClientEventSideEffect[PipelineQuery, Timeline]
     with PipelineResultSideEffect.Conditionally[
       PipelineQuery,
@@ -30,7 +32,7 @@ case class HomeScribeClientEventSideEffect(
 
   override val identifier: SideEffectIdentifier = SideEffectIdentifier("HomeScribeClientEvent")
 
-  override val page = "timelinemixer"
+  override val page = "home"
 
   override def onlyIf(
     query: PipelineQuery,
@@ -59,8 +61,21 @@ case class HomeScribeClientEventSideEffect(
     val whoToSubscribeUsers =
       whoToSubscribeCandidatePipelineIdentifier.flatMap(sources.get).toSeq.flatten
 
+    val communititesToJoin =
+      forYouCommunitiesToJoinCandidatePipelineIdentifier.flatMap(sources.get).toSeq.flatten
+
+    val relevancePrompt =
+      forYouRelevancePromptCandidatePipelineIdentifier.flatMap(sources.get).toSeq.flatten
+
     val servedEvents = ServedEventsBuilder
-      .build(query, injectedTweets, promotedTweets, whoToFollowUsers, whoToSubscribeUsers)
+      .build(
+        query,
+        injectedTweets,
+        promotedTweets,
+        whoToFollowUsers,
+        whoToSubscribeUsers,
+        communititesToJoin,
+        relevancePrompt)
 
     val emptyTimelineEvents = EmptyTimelineEventsBuilder.build(query, injectedTweets)
 

@@ -1,6 +1,8 @@
 package com.twitter.home_mixer.product.scored_tweets.feature_hydrator
 
 import com.twitter.finagle.stats.StatsReceiver
+import com.twitter.home_mixer.functional_component.feature_hydrator.TweetypieContentDataRecordFeature
+import com.twitter.home_mixer.functional_component.feature_hydrator.WithDefaultFeatureMap
 import com.twitter.home_mixer.model.ContentFeatures
 import com.twitter.home_mixer.model.HomeFeatures._
 import com.twitter.home_mixer.product.scored_tweets.feature_hydrator.adapters.content.InReplyToContentFeatureAdapter
@@ -12,7 +14,6 @@ import com.twitter.product_mixer.core.feature.Feature
 import com.twitter.product_mixer.core.feature.FeatureWithDefaultOnFailure
 import com.twitter.product_mixer.core.feature.datarecord.DataRecordInAFeature
 import com.twitter.product_mixer.core.feature.featuremap.FeatureMap
-import com.twitter.product_mixer.core.feature.featuremap.FeatureMapBuilder
 import com.twitter.product_mixer.core.functional_component.feature_hydrator.BulkCandidateFeatureHydrator
 import com.twitter.product_mixer.core.model.common.CandidateWithFeatures
 import com.twitter.product_mixer.core.model.common.identifier.FeatureHydratorIdentifier
@@ -59,7 +60,8 @@ object InReplyToTweetypieContentDataRecordFeature
  */
 @Singleton
 class ReplyFeatureHydrator @Inject() (statsReceiver: StatsReceiver)
-    extends BulkCandidateFeatureHydrator[PipelineQuery, TweetCandidate] {
+    extends BulkCandidateFeatureHydrator[PipelineQuery, TweetCandidate]
+    with WithDefaultFeatureMap {
 
   override val identifier: FeatureHydratorIdentifier = FeatureHydratorIdentifier("ReplyTweet")
 
@@ -70,14 +72,18 @@ class ReplyFeatureHydrator @Inject() (statsReceiver: StatsReceiver)
     InReplyToTweetypieContentDataRecordFeature
   )
 
-  private val defaulDataRecord: DataRecord = new DataRecord()
+  private val defaultDataRecord: DataRecord = new DataRecord()
 
-  private val DefaultFeatureMap = FeatureMapBuilder()
-    .add(ConversationDataRecordFeature, defaulDataRecord)
-    .add(InReplyToTweetHydratedEarlybirdFeature, None)
-    .add(InReplyToEarlybirdDataRecordFeature, defaulDataRecord)
-    .add(InReplyToTweetypieContentDataRecordFeature, defaulDataRecord)
-    .build()
+  override val defaultFeatureMap = FeatureMap(
+    ConversationDataRecordFeature,
+    defaultDataRecord,
+    InReplyToTweetHydratedEarlybirdFeature,
+    None,
+    InReplyToEarlybirdDataRecordFeature,
+    defaultDataRecord,
+    InReplyToTweetypieContentDataRecordFeature,
+    defaultDataRecord
+  )
 
   private val scopedStatsReceiver = statsReceiver.scope(getClass.getSimpleName)
   private val hydratedReplyCounter = scopedStatsReceiver.counter("hydratedReply")
@@ -87,14 +93,17 @@ class ReplyFeatureHydrator @Inject() (statsReceiver: StatsReceiver)
     query: PipelineQuery,
     candidates: Seq[CandidateWithFeatures[TweetCandidate]]
   ): Stitch[Seq[FeatureMap]] = OffloadFuturePools.offload {
+    // only hydrate for IN candidates
+    val eligibleCandidates =
+      candidates.filter(_.features.getOrElse(FromInNetworkSourceFeature, false))
     val replyToInReplyToTweetMap =
-      ReplyRetweetUtil.replyTweetIdToInReplyToTweetMap(candidates)
+      ReplyRetweetUtil.replyTweetIdToInReplyToTweetMap(eligibleCandidates)
     val candidatesWithRepliesHydrated = candidates.map { candidate =>
       replyToInReplyToTweetMap
         .get(candidate.candidate.id).map { inReplyToTweet =>
           hydratedReplyCounter.incr()
           hydratedReplyCandidate(candidate, inReplyToTweet)
-        }.getOrElse((candidate, None, None))
+        }.getOrElse((candidate, None, None, defaultDataRecord))
     }
 
     /**
@@ -102,12 +111,14 @@ class ReplyFeatureHydrator @Inject() (statsReceiver: StatsReceiver)
      * the descendants.
      */
     val ancestorTweetToDescendantRepliesMap =
-      ReplyRetweetUtil.ancestorTweetIdToDescendantRepliesMap(candidates)
+      ReplyRetweetUtil.ancestorTweetIdToDescendantRepliesMap(eligibleCandidates)
     val candidatesWithRepliesAndAncestorTweetsHydrated = candidatesWithRepliesHydrated.map {
       case (
             maybeAncestorTweetCandidate,
             updatedReplyConversationFeatures,
-            inReplyToTweetEarlyBirdFeature) =>
+            inReplyToTweetEarlyBirdFeature,
+            inReplyToTweetContentDataRecord
+          ) =>
         ancestorTweetToDescendantRepliesMap
           .get(maybeAncestorTweetCandidate.candidate.id)
           .map { descendantReplies =>
@@ -120,35 +131,54 @@ class ReplyFeatureHydrator @Inject() (statsReceiver: StatsReceiver)
                 maybeAncestorTweetCandidate,
                 descendantReplies,
                 updatedReplyConversationFeatures)
-            (ancestorTweetCandidate, inReplyToTweetEarlyBirdFeature, updatedConversationFeatures)
+            (
+              ancestorTweetCandidate,
+              inReplyToTweetEarlyBirdFeature,
+              updatedConversationFeatures,
+              inReplyToTweetContentDataRecord)
           }
           .getOrElse(
             (
               maybeAncestorTweetCandidate,
               inReplyToTweetEarlyBirdFeature,
-              updatedReplyConversationFeatures))
+              updatedReplyConversationFeatures,
+              inReplyToTweetContentDataRecord
+            ))
     }
 
     candidatesWithRepliesAndAncestorTweetsHydrated.map {
-      case (candidate, inReplyToTweetEarlyBirdFeature, updatedConversationFeatures) =>
+      case (
+            candidate,
+            inReplyToTweetEarlyBirdFeature,
+            updatedConversationFeatures,
+            inReplyToTweetContentDataRecord) =>
         val conversationDataRecordFeature = updatedConversationFeatures
           .map(f => ConversationFeaturesAdapter.adaptToDataRecord(cf.ConversationFeatures.V1(f)))
-          .getOrElse(defaulDataRecord)
+          .getOrElse(defaultDataRecord)
 
         val inReplyToEarlybirdDataRecord =
           InReplyToEarlybirdAdapter
             .adaptToDataRecords(inReplyToTweetEarlyBirdFeature).asScala.head
-        val inReplyToContentDataRecord = InReplyToContentFeatureAdapter
-          .adaptToDataRecords(
-            inReplyToTweetEarlyBirdFeature.map(ContentFeatures.fromThrift)).asScala.head
+        val inReplyToContentDataRecord = {
+          if (inReplyToTweetContentDataRecord.equals(defaultDataRecord)) {
+            InReplyToContentFeatureAdapter
+              .adaptToDataRecords(
+                inReplyToTweetEarlyBirdFeature.map(ContentFeatures.fromThrift)).asScala.head
+          } else
+            inReplyToTweetContentDataRecord
+        }
 
-        FeatureMapBuilder()
-          .add(ConversationDataRecordFeature, conversationDataRecordFeature)
-          .add(InReplyToTweetHydratedEarlybirdFeature, inReplyToTweetEarlyBirdFeature)
-          .add(InReplyToEarlybirdDataRecordFeature, inReplyToEarlybirdDataRecord)
-          .add(InReplyToTweetypieContentDataRecordFeature, inReplyToContentDataRecord)
-          .build()
-      case _ => DefaultFeatureMap
+        FeatureMap(
+          ConversationDataRecordFeature,
+          conversationDataRecordFeature,
+          InReplyToTweetHydratedEarlybirdFeature,
+          inReplyToTweetEarlyBirdFeature,
+          InReplyToEarlybirdDataRecordFeature,
+          inReplyToEarlybirdDataRecord,
+          InReplyToTweetypieContentDataRecordFeature,
+          inReplyToContentDataRecord
+        )
+      case _ => defaultFeatureMap
     }
   }
 
@@ -158,7 +188,8 @@ class ReplyFeatureHydrator @Inject() (statsReceiver: StatsReceiver)
   ): (
     CandidateWithFeatures[TweetCandidate],
     Option[ConversationFeatures],
-    Option[ThriftTweetFeatures]
+    Option[ThriftTweetFeatures],
+    DataRecord
   ) = {
     val tweetedAfterInReplyToTweetInSecs =
       (
@@ -190,15 +221,24 @@ class ReplyFeatureHydrator @Inject() (statsReceiver: StatsReceiver)
     // Note: if inReplyToTweet is a retweet, we need to read early bird feature from the merged
     // early bird feature field from RetweetSourceTweetFeatureHydrator class.
     // But if inReplyToTweet is a reply, we return its early bird feature directly
+    val sourceFeatures = inReplyToTweetCandidate.features
+      .getOrElse(SourceTweetEarlybirdFeature, None)
     val inReplyToTweetThriftTweetFeaturesOpt = {
-      if (inReplyToTweetCandidate.features.getOrElse(IsRetweetFeature, false)) {
-        inReplyToTweetCandidate.features.getOrElse(SourceTweetEarlybirdFeature, None)
+      if (inReplyToTweetCandidate.features.getOrElse(IsRetweetFeature, false)
+        && sourceFeatures.nonEmpty) {
+        sourceFeatures
       } else {
         inReplyToTweetCandidate.features.getOrElse(EarlybirdFeature, None)
       }
     }
+    val inReplyToTweetContentDataRecord = inReplyToTweetCandidate.features
+      .getOrElse(TweetypieContentDataRecordFeature, defaultDataRecord)
 
-    (replyCandidate, updatedConversationFeatures, inReplyToTweetThriftTweetFeaturesOpt)
+    (
+      replyCandidate,
+      updatedConversationFeatures,
+      inReplyToTweetThriftTweetFeaturesOpt,
+      inReplyToTweetContentDataRecord)
   }
 
   private def hydrateAncestorTweetCandidate(

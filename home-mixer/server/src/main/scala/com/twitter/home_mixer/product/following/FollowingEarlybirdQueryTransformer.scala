@@ -2,7 +2,6 @@ package com.twitter.home_mixer.product.following
 
 import com.twitter.finagle.thrift.ClientId
 import com.twitter.finagle.tracing.Trace
-import com.twitter.home_mixer.model.HomeFeatures.RealGraphInNetworkScoresFeature
 import com.twitter.home_mixer.product.following.model.FollowingQuery
 import com.twitter.home_mixer.product.following.param.FollowingParam.ServerMaxResultsParam
 import com.twitter.product_mixer.component_library.feature_hydrator.query.social_graph.SGSFollowedUsersFeature
@@ -27,8 +26,6 @@ case class FollowingEarlybirdQueryTransformer @Inject() (clientId: ClientId)
   override def transform(query: FollowingQuery): t.EarlybirdRequest = {
     val followedUserIds =
       query.features.map(_.get(SGSFollowedUsersFeature)).getOrElse(Seq.empty).toSet
-    val realGraphInNetworkFollowedUserIds =
-      query.features.map(_.get(RealGraphInNetworkScoresFeature)).getOrElse(Map.empty).keySet
     val userId = query.getRequiredUserId
     val combinedUserIds = userId +: followedUserIds.toSeq
 

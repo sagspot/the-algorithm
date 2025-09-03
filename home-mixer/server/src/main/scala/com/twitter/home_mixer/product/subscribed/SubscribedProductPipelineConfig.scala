@@ -1,7 +1,6 @@
 package com.twitter.home_mixer.product.subscribed
 
 import com.twitter.conversions.DurationOps._
-import com.twitter.home_mixer.marshaller.timelines.ChronologicalCursorUnmarshaller
 import com.twitter.home_mixer.model.request.HomeMixerRequest
 import com.twitter.home_mixer.model.request.SubscribedProduct
 import com.twitter.home_mixer.model.request.SubscribedProductContext
@@ -10,6 +9,7 @@ import com.twitter.home_mixer.product.subscribed.param.SubscribedParam.ServerMax
 import com.twitter.home_mixer.service.HomeMixerAccessPolicy.DefaultHomeMixerAccessPolicy
 import com.twitter.home_mixer.service.HomeMixerAlertConfig.DefaultNotificationGroup
 import com.twitter.product_mixer.component_library.model.cursor.UrtOrderedCursor
+import com.twitter.product_mixer.component_library.premarshaller.cursor.timelines.ChronologicalCursorUnmarshaller
 import com.twitter.product_mixer.component_library.premarshaller.cursor.UrtCursorSerializer
 import com.twitter.product_mixer.core.functional_component.common.access_policy.AccessPolicy
 import com.twitter.product_mixer.core.functional_component.common.alert.Alert

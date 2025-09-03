@@ -4,6 +4,7 @@ import com.twitter.home_mixer.product.following.model.HomeMixerExternalStrings
 import com.twitter.product_mixer.component_library.model.candidate.TweetCandidate
 import com.twitter.product_mixer.core.model.marshalling.response.urt.icon
 import com.twitter.product_mixer.core.model.marshalling.response.urt.metadata.ChildFeedbackAction
+import com.twitter.product_mixer.core.model.marshalling.response.urt.metadata.ClientEventInfo
 import com.twitter.product_mixer.core.model.marshalling.response.urt.metadata.RichBehavior
 import com.twitter.product_mixer.core.model.marshalling.response.urt.metadata.RichFeedbackBehaviorReportTweet
 import com.twitter.product_mixer.core.product.guice.scope.ProductScoped
@@ -17,7 +18,7 @@ case class ReportTweetChildFeedbackActionBuilder @Inject() (
   externalStrings: HomeMixerExternalStrings) {
 
   def apply(
-    candidate: TweetCandidate
+    candidate: TweetCandidate,
   ): Option[ChildFeedbackAction] = {
     Some(
       ChildFeedbackAction(
@@ -27,7 +28,15 @@ case class ReportTweetChildFeedbackActionBuilder @Inject() (
         feedbackUrl = None,
         hasUndoAction = Some(true),
         confirmationDisplayType = None,
-        clientEventInfo = None,
+        clientEventInfo = Some(
+          ClientEventInfo(
+            component = None,
+            element = Some("report_tweet"),
+            details = None,
+            action = Some("click"),
+            entityToken = None
+          )
+        ),
         icon = Some(icon.Flag),
         richBehavior = Some(RichFeedbackBehaviorReportTweet(candidate.id)),
         subprompt = None

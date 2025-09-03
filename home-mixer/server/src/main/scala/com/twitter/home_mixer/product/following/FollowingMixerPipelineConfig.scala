@@ -5,36 +5,45 @@ import com.twitter.goldfinch.api.AdsInjectionSurfaceAreas
 import com.twitter.home_mixer.candidate_pipeline.ConversationServiceCandidatePipelineConfigBuilder
 import com.twitter.home_mixer.candidate_pipeline.EditedTweetsCandidatePipelineConfig
 import com.twitter.home_mixer.candidate_pipeline.NewTweetsPillCandidatePipelineConfig
-import com.twitter.home_mixer.functional_component.decorator.HomeConversationServiceCandidateDecorator
+import com.twitter.home_mixer.candidate_pipeline.VerifiedPromptCandidatePipelineConfig
 import com.twitter.home_mixer.functional_component.decorator.urt.builder.AddEntriesWithReplaceAndShowAlertAndCoverInstructionBuilder
-import com.twitter.home_mixer.functional_component.decorator.urt.builder.HomeFeedbackActionInfoBuilder
 import com.twitter.home_mixer.functional_component.feature_hydrator._
 import com.twitter.home_mixer.functional_component.selector.UpdateHomeClientEventDetails
 import com.twitter.home_mixer.functional_component.selector.UpdateNewTweetsPillDecoration
 import com.twitter.home_mixer.functional_component.side_effect._
-import com.twitter.home_mixer.model.GapIncludeInstruction
-import com.twitter.home_mixer.param.HomeGlobalParams.EnableImpressionBloomFilter
+import com.twitter.home_mixer.model.ClearCacheIncludeInstruction
+import com.twitter.home_mixer.model.NavigationIncludeInstruction
+import com.twitter.home_mixer.param.HomeGlobalParams.EnableSSPAdsBrandSafetySettingsFeatureHydratorParam
 import com.twitter.home_mixer.param.HomeGlobalParams.MaxNumberReplaceInstructionsParam
 import com.twitter.home_mixer.param.HomeMixerFlagName.ScribeClientEventsFlag
-import com.twitter.product_mixer.component_library.feature_hydrator.query.social_graph.SGSFollowedUsersQueryFeatureHydrator
 import com.twitter.home_mixer.product.following.model.FollowingQuery
 import com.twitter.home_mixer.product.following.model.HomeMixerExternalStrings
+import com.twitter.home_mixer.product.following.param.FollowingParam.ClearCache
 import com.twitter.home_mixer.product.following.param.FollowingParam.EnableFlipInjectionModuleCandidatePipelineParam
-import com.twitter.home_mixer.product.following.param.FollowingParam.FlipInlineInjectionModulePosition
+import com.twitter.home_mixer.product.following.param.FollowingParam.EnablePostContextFeatureHydratorParam
+import com.twitter.home_mixer.product.following.param.FollowingParam.Navigation
 import com.twitter.home_mixer.product.following.param.FollowingParam.ServerMaxResultsParam
-import com.twitter.home_mixer.product.following.param.FollowingParam.WhoToFollowPositionParam
+import com.twitter.home_mixer.product.following.param.FollowingParam.StaticParamValueFive
+import com.twitter.home_mixer.product.following.param.FollowingParam.StaticParamValueZero
 import com.twitter.home_mixer.util.CandidatesUtil
+import com.twitter.home_mixer.{thriftscala => hmt}
 import com.twitter.inject.annotations.Flag
 import com.twitter.logpipeline.client.common.EventPublisher
+import com.twitter.product_mixer.component_library.feature_hydrator.query.ads.SSPAdsBrandSafetySettingsFeatureHydrator
 import com.twitter.product_mixer.component_library.feature_hydrator.query.async.AsyncQueryFeatureHydrator
 import com.twitter.product_mixer.component_library.feature_hydrator.query.impressed_tweets.ImpressedTweetsQueryFeatureHydrator
-import com.twitter.product_mixer.component_library.feature_hydrator.query.param_gated.AsyncParamGatedQueryFeatureHydrator
-import com.twitter.product_mixer.component_library.gate.NonEmptyCandidatesGate
+import com.twitter.product_mixer.component_library.feature_hydrator.query.location.UserLocationQueryFeatureHydrator
+import com.twitter.product_mixer.component_library.feature_hydrator.query.param_gated.ParamGatedQueryFeatureHydrator
+import com.twitter.product_mixer.component_library.feature_hydrator.query.social_graph.SGSFollowedUsersQueryFeatureHydrator
 import com.twitter.product_mixer.component_library.model.candidate.TweetCandidate
 import com.twitter.product_mixer.component_library.pipeline.candidate.flexible_injection_pipeline.FlipPromptDependentCandidatePipelineConfigBuilder
+import com.twitter.product_mixer.component_library.pipeline.candidate.flexible_injection_pipeline.selector.FlipPromptDynamicInsertionPosition
 import com.twitter.product_mixer.component_library.pipeline.candidate.who_to_follow_module.WhoToFollowArmCandidatePipelineConfig
 import com.twitter.product_mixer.component_library.premarshaller.urt.UrtDomainMarshaller
+import com.twitter.product_mixer.component_library.premarshaller.urt.builder.ClearCacheInstructionBuilder
+import com.twitter.product_mixer.component_library.premarshaller.urt.builder.NavigationInstructionBuilder
 import com.twitter.product_mixer.component_library.premarshaller.urt.builder.OrderedBottomCursorBuilder
+import com.twitter.product_mixer.component_library.premarshaller.urt.builder.OrderedCursorIdSelector.TweetIdSelector
 import com.twitter.product_mixer.component_library.premarshaller.urt.builder.OrderedGapCursorBuilder
 import com.twitter.product_mixer.component_library.premarshaller.urt.builder.OrderedTopCursorBuilder
 import com.twitter.product_mixer.component_library.premarshaller.urt.builder.ReplaceAllEntries
@@ -43,10 +52,12 @@ import com.twitter.product_mixer.component_library.premarshaller.urt.builder.Sho
 import com.twitter.product_mixer.component_library.premarshaller.urt.builder.ShowCoverInstructionBuilder
 import com.twitter.product_mixer.component_library.premarshaller.urt.builder.StaticTimelineScribeConfigBuilder
 import com.twitter.product_mixer.component_library.premarshaller.urt.builder.UrtMetadataBuilder
+import com.twitter.product_mixer.component_library.premarshaller.urt.builder.earlybird.EarlybirdGapIncludeInstruction
 import com.twitter.product_mixer.component_library.selector.DropMaxCandidates
 import com.twitter.product_mixer.component_library.selector.DropMaxModuleItemCandidates
 import com.twitter.product_mixer.component_library.selector.DropModuleTooFewModuleItemResults
 import com.twitter.product_mixer.component_library.selector.InsertAppendResults
+import com.twitter.product_mixer.component_library.selector.InsertDynamicPositionResults
 import com.twitter.product_mixer.component_library.selector.InsertFixedPositionResults
 import com.twitter.product_mixer.component_library.selector.SelectConditionally
 import com.twitter.product_mixer.component_library.selector.UpdateSortCandidates
@@ -61,13 +72,10 @@ import com.twitter.product_mixer.core.functional_component.marshaller.response.u
 import com.twitter.product_mixer.core.functional_component.premarshaller.DomainMarshaller
 import com.twitter.product_mixer.core.functional_component.selector.Selector
 import com.twitter.product_mixer.core.functional_component.side_effect.PipelineResultSideEffect
-import com.twitter.product_mixer.core.model.common.UniversalNoun
 import com.twitter.product_mixer.core.model.common.identifier.CandidatePipelineIdentifier
 import com.twitter.product_mixer.core.model.common.identifier.MixerPipelineIdentifier
 import com.twitter.product_mixer.core.model.marshalling.response.urt.Timeline
-import com.twitter.product_mixer.core.model.marshalling.response.urt.TimelineModule
 import com.twitter.product_mixer.core.model.marshalling.response.urt.TimelineScribeConfig
-import com.twitter.product_mixer.core.model.marshalling.response.urt.item.tweet.TweetItem
 import com.twitter.product_mixer.core.pipeline.FailOpenPolicy
 import com.twitter.product_mixer.core.pipeline.candidate.CandidatePipelineConfig
 import com.twitter.product_mixer.core.pipeline.candidate.DependentCandidatePipelineConfig
@@ -85,31 +93,26 @@ class FollowingMixerPipelineConfig @Inject() (
   conversationServiceCandidatePipelineConfigBuilder: ConversationServiceCandidatePipelineConfigBuilder[
     FollowingQuery
   ],
-  homeFeedbackActionInfoBuilder: HomeFeedbackActionInfoBuilder,
   followingAdsCandidatePipelineBuilder: FollowingAdsCandidatePipelineBuilder,
   followingWhoToFollowCandidatePipelineConfigBuilder: FollowingWhoToFollowCandidatePipelineConfigBuilder,
   flipPromptDependentCandidatePipelineConfigBuilder: FlipPromptDependentCandidatePipelineConfigBuilder,
   editedTweetsCandidatePipelineConfig: EditedTweetsCandidatePipelineConfig,
   newTweetsPillCandidatePipelineConfig: NewTweetsPillCandidatePipelineConfig[FollowingQuery],
+  verifiedPromptCandidatePipelineConfig: VerifiedPromptCandidatePipelineConfig,
   dismissInfoQueryFeatureHydrator: DismissInfoQueryFeatureHydrator,
   gizmoduckUserQueryFeatureHydrator: GizmoduckUserQueryFeatureHydrator,
   persistenceStoreQueryFeatureHydrator: PersistenceStoreQueryFeatureHydrator,
-  realGraphInNetworkSourceQueryHydrator: RealGraphInNetworkScoresQueryFeatureHydrator,
+  rateLimitQueryFeatureHydrator: RateLimitQueryFeatureHydrator,
   requestQueryFeatureHydrator: RequestQueryFeatureHydrator[FollowingQuery],
   sgsFollowedUsersQueryFeatureHydrator: SGSFollowedUsersQueryFeatureHydrator,
-  impressionBloomFilterQueryFeatureHydrator: ImpressionBloomFilterQueryFeatureHydrator[
-    FollowingQuery
-  ],
-  manhattanTweetImpressionsQueryFeatureHydrator: TweetImpressionsQueryFeatureHydrator[
-    FollowingQuery
-  ],
   memcacheTweetImpressionsQueryFeatureHydrator: ImpressedTweetsQueryFeatureHydrator,
   lastNonPollingTimeQueryFeatureHydrator: LastNonPollingTimeQueryFeatureHydrator,
+  userLocationQueryFeatureHydrator: UserLocationQueryFeatureHydrator,
+  userSubscriptionQueryFeatureHydrator: UserSubscriptionQueryFeatureHydrator,
+  sspAdsBrandSafetySettingsFeatureHydrator: SSPAdsBrandSafetySettingsFeatureHydrator,
   adsInjector: AdsInjector,
   updateLastNonPollingTimeSideEffect: UpdateLastNonPollingTimeSideEffect[FollowingQuery, Timeline],
   publishClientSentImpressionsEventBusSideEffect: PublishClientSentImpressionsEventBusSideEffect,
-  publishClientSentImpressionsManhattanSideEffect: PublishClientSentImpressionsManhattanSideEffect,
-  publishImpressionBloomFilterSideEffect: PublishImpressionBloomFilterSideEffect,
   updateTimelinesPersistenceStoreSideEffect: UpdateTimelinesPersistenceStoreSideEffect,
   truncateTimelinesPersistenceStoreSideEffect: TruncateTimelinesPersistenceStoreSideEffect,
   homeTimelineServedCandidatesSideEffect: HomeScribeServedCandidatesSideEffect,
@@ -128,17 +131,18 @@ class FollowingMixerPipelineConfig @Inject() (
   override val fetchQueryFeatures: Seq[QueryFeatureHydrator[FollowingQuery]] = Seq(
     requestQueryFeatureHydrator,
     sgsFollowedUsersQueryFeatureHydrator,
-    realGraphInNetworkSourceQueryHydrator,
+    rateLimitQueryFeatureHydrator,
+    gizmoduckUserQueryFeatureHydrator,
+    userSubscriptionQueryFeatureHydrator,
+    ParamGatedQueryFeatureHydrator(
+      EnableSSPAdsBrandSafetySettingsFeatureHydratorParam,
+      sspAdsBrandSafetySettingsFeatureHydrator
+    ),
     AsyncQueryFeatureHydrator(dependentCandidatesStep, dismissInfoQueryFeatureHydrator),
-    AsyncQueryFeatureHydrator(dependentCandidatesStep, gizmoduckUserQueryFeatureHydrator),
     AsyncQueryFeatureHydrator(dependentCandidatesStep, persistenceStoreQueryFeatureHydrator),
     AsyncQueryFeatureHydrator(dependentCandidatesStep, lastNonPollingTimeQueryFeatureHydrator),
-    AsyncParamGatedQueryFeatureHydrator(
-      EnableImpressionBloomFilter,
-      resultSelectorsStep,
-      impressionBloomFilterQueryFeatureHydrator),
-    AsyncQueryFeatureHydrator(resultSelectorsStep, manhattanTweetImpressionsQueryFeatureHydrator),
-    AsyncQueryFeatureHydrator(resultSelectorsStep, memcacheTweetImpressionsQueryFeatureHydrator)
+    AsyncQueryFeatureHydrator(dependentCandidatesStep, userLocationQueryFeatureHydrator),
+    AsyncQueryFeatureHydrator(resultSelectorsStep, memcacheTweetImpressionsQueryFeatureHydrator),
   )
 
   private val earlybirdCandidatePipelineScope =
@@ -146,12 +150,12 @@ class FollowingMixerPipelineConfig @Inject() (
 
   private val conversationServiceCandidatePipelineConfig =
     conversationServiceCandidatePipelineConfigBuilder.build(
-      Seq(NonEmptyCandidatesGate(earlybirdCandidatePipelineScope)),
-      HomeConversationServiceCandidateDecorator(homeFeedbackActionInfoBuilder)
+      earlybirdCandidatePipelineScope,
+      hmt.ServedType.FollowingInNetwork,
+      EnablePostContextFeatureHydratorParam
     )
 
-  private val followingAdsCandidatePipelineConfig =
-    followingAdsCandidatePipelineBuilder.build(earlybirdCandidatePipelineScope)
+  private val followingAdsCandidatePipelineConfig = followingAdsCandidatePipelineBuilder.build()
 
   private val followingWhoToFollowCandidatePipelineConfig =
     followingWhoToFollowCandidatePipelineConfigBuilder.build(earlybirdCandidatePipelineScope)
@@ -161,18 +165,20 @@ class FollowingMixerPipelineConfig @Inject() (
       supportedClientParam = Some(EnableFlipInjectionModuleCandidatePipelineParam)
     )
 
-  override val candidatePipelines: Seq[CandidatePipelineConfig[FollowingQuery, _, _, _]] =
-    Seq(followingEarlybirdCandidatePipelineConfig)
+  override val candidatePipelines: Seq[CandidatePipelineConfig[FollowingQuery, _, _, _]] = Seq(
+    followingEarlybirdCandidatePipelineConfig,
+    followingAdsCandidatePipelineConfig
+  )
 
   override val dependentCandidatePipelines: Seq[
     DependentCandidatePipelineConfig[FollowingQuery, _, _, _]
   ] = Seq(
     conversationServiceCandidatePipelineConfig,
-    followingAdsCandidatePipelineConfig,
     followingWhoToFollowCandidatePipelineConfig,
     flipPromptCandidatePipelineConfig,
     editedTweetsCandidatePipelineConfig,
-    newTweetsPillCandidatePipelineConfig
+    newTweetsPillCandidatePipelineConfig,
+    verifiedPromptCandidatePipelineConfig
   )
 
   override val failOpenPolicies: Map[CandidatePipelineIdentifier, FailOpenPolicy] = Map(
@@ -206,12 +212,16 @@ class FollowingMixerPipelineConfig @Inject() (
     ),
     InsertAppendResults(candidatePipeline = conversationServiceCandidatePipelineConfig.identifier),
     InsertFixedPositionResults(
-      candidatePipeline = followingWhoToFollowCandidatePipelineConfig.identifier,
-      positionParam = WhoToFollowPositionParam
+      candidatePipeline = verifiedPromptCandidatePipelineConfig.identifier,
+      positionParam = StaticParamValueZero
+    ),
+    InsertDynamicPositionResults(
+      candidatePipeline = flipPromptCandidatePipelineConfig.identifier,
+      dynamicInsertionPosition = FlipPromptDynamicInsertionPosition(StaticParamValueZero)
     ),
     InsertFixedPositionResults(
-      candidatePipeline = flipPromptCandidatePipelineConfig.identifier,
-      positionParam = FlipInlineInjectionModulePosition
+      candidatePipeline = followingWhoToFollowCandidatePipelineConfig.identifier,
+      positionParam = StaticParamValueFive
     ),
     InsertAdResults(
       surfaceAreaName = AdsInjectionSurfaceAreas.HomeTimeline,
@@ -236,7 +246,7 @@ class FollowingMixerPipelineConfig @Inject() (
     ),
     UpdateHomeClientEventDetails(
       candidatePipelines = Set(conversationServiceCandidatePipelineConfig.identifier)
-    ),
+    )
   )
 
   private val homeScribeClientEventSideEffect = HomeScribeClientEventSideEffect(
@@ -253,8 +263,6 @@ class FollowingMixerPipelineConfig @Inject() (
     homeScribeClientEventSideEffect,
     homeTimelineServedCandidatesSideEffect,
     publishClientSentImpressionsEventBusSideEffect,
-    publishClientSentImpressionsManhattanSideEffect,
-    publishImpressionBloomFilterSideEffect,
     truncateTimelinesPersistenceStoreSideEffect,
     updateLastNonPollingTimeSideEffect,
     updateTimelinesPersistenceStoreSideEffect,
@@ -262,30 +270,37 @@ class FollowingMixerPipelineConfig @Inject() (
 
   override val domainMarshaller: DomainMarshaller[FollowingQuery, Timeline] = {
     val instructionBuilders = Seq(
+      ClearCacheInstructionBuilder(
+        ClearCacheIncludeInstruction(
+          ClearCache.PtrEnableParam,
+          ClearCache.ColdStartEnableParam,
+          ClearCache.WarmStartEnableParam,
+          ClearCache.ManualRefreshEnableParam,
+          ClearCache.NavigateEnableParam,
+          ClearCache.MinEntriesParam
+        )),
       ReplaceEntryInstructionBuilder(ReplaceAllEntries),
       AddEntriesWithReplaceAndShowAlertAndCoverInstructionBuilder(),
       ShowAlertInstructionBuilder(),
       ShowCoverInstructionBuilder(),
+      NavigationInstructionBuilder(
+        NavigationIncludeInstruction(
+          Navigation.PtrEnableParam,
+          Navigation.ColdStartEnableParam,
+          Navigation.WarmStartEnableParam,
+          Navigation.ManualRefreshEnableParam,
+          Navigation.NavigateEnableParam
+        ))
     )
 
-    val idSelector: PartialFunction[UniversalNoun[_], Long] = {
-      // exclude ads while determining tweet cursor values
-      case item: TweetItem if item.promotedMetadata.isEmpty => item.id
-      case module: TimelineModule
-          if module.items.headOption.exists(_.item.isInstanceOf[TweetItem]) =>
-        module.items.last.item match { case item: TweetItem => item.id }
-    }
-    val topCursorBuilder = OrderedTopCursorBuilder(idSelector)
+    val topCursorBuilder = OrderedTopCursorBuilder(TweetIdSelector)
     val bottomCursorBuilder =
-      OrderedBottomCursorBuilder(idSelector, GapIncludeInstruction.inverse())
-    val gapCursorBuilder = OrderedGapCursorBuilder(idSelector, GapIncludeInstruction)
+      OrderedBottomCursorBuilder(TweetIdSelector, EarlybirdGapIncludeInstruction.inverse())
+    val gapCursorBuilder = OrderedGapCursorBuilder(TweetIdSelector, EarlybirdGapIncludeInstruction)
 
-    val metadataBuilder = UrtMetadataBuilder(
-      title = None,
-      scribeConfigBuilder = Some(
-        StaticTimelineScribeConfigBuilder(
-          TimelineScribeConfig(page = Some("following"), section = None, entityToken = None)))
-    )
+    val scribeConfigBuilder =
+      StaticTimelineScribeConfigBuilder(TimelineScribeConfig(Some("following"), None, None))
+    val metadataBuilder = UrtMetadataBuilder(scribeConfigBuilder = Some(scribeConfigBuilder))
 
     UrtDomainMarshaller(
       instructionBuilders = instructionBuilders,

@@ -3,7 +3,6 @@ package com.twitter.home_mixer.functional_component.decorator.urt.builder
 import com.twitter.home_mixer.model.HomeFeatures.AuthorIdFeature
 import com.twitter.home_mixer.model.HomeFeatures.IsRetweetFeature
 import com.twitter.home_mixer.model.HomeFeatures.ScreenNamesFeature
-import com.twitter.home_mixer.model.HomeFeatures.SuggestTypeFeature
 import com.twitter.home_mixer.product.following.model.HomeMixerExternalStrings
 import com.twitter.product_mixer.core.feature.featuremap.FeatureMap
 import com.twitter.product_mixer.core.model.marshalling.response.urt.metadata.ChildFeedbackAction
@@ -29,8 +28,7 @@ case class RetweeterChildFeedbackActionBuilder @Inject() (
           promptExternalString = externalStrings.showFewerRetweetsString,
           confirmationExternalString = externalStrings.showFewerRetweetsConfirmationString,
           engagementType = t.FeedbackEngagementType.Retweet,
-          stringCenter = stringCenter,
-          injectionType = candidateFeatures.getOrElse(SuggestTypeFeature, None)
+          stringCenter = stringCenter
         )
       }
     } else None

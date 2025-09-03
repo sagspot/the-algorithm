@@ -1,27 +1,21 @@
 package com.twitter.home_mixer.product.scored_tweets.scorer
 
+import com.twitter.home_mixer.functional_component.feature_hydrator.BroadcastStateFeature
+import com.twitter.home_mixer.functional_component.feature_hydrator.SpaceStateFeature
 import com.twitter.home_mixer.functional_component.scorer.FeedbackFatigueScorer
-import com.twitter.home_mixer.model.HomeFeatures
-import com.twitter.home_mixer.model.HomeFeatures.AuthorIsBlueVerifiedFeature
-import com.twitter.home_mixer.model.HomeFeatures.AuthorIsCreatorFeature
-import com.twitter.home_mixer.model.HomeFeatures.FeedbackHistoryFeature
-import com.twitter.home_mixer.model.HomeFeatures.InNetworkFeature
-import com.twitter.home_mixer.model.HomeFeatures.InReplyToTweetIdFeature
-import com.twitter.home_mixer.product.scored_tweets.param.ScoredTweetsParam.BlueVerifiedAuthorInNetworkMultiplierParam
-import com.twitter.home_mixer.product.scored_tweets.param.ScoredTweetsParam.BlueVerifiedAuthorOutOfNetworkMultiplierParam
-import com.twitter.home_mixer.product.scored_tweets.param.ScoredTweetsParam.CreatorInNetworkMultiplierParam
-import com.twitter.home_mixer.product.scored_tweets.param.ScoredTweetsParam.CreatorOutOfNetworkMultiplierParam
-import com.twitter.home_mixer.product.scored_tweets.param.ScoredTweetsParam.OutOfNetworkScaleFactorParam
-import com.twitter.home_mixer.util.CandidatesUtil
+import com.twitter.home_mixer.model.HomeFeatures._
+import com.twitter.home_mixer.product.scored_tweets.param.ScoredTweetsParam._
 import com.twitter.product_mixer.component_library.model.candidate.TweetCandidate
 import com.twitter.product_mixer.core.feature.featuremap.FeatureMap
 import com.twitter.product_mixer.core.model.common.CandidateWithFeatures
 import com.twitter.product_mixer.core.pipeline.PipelineQuery
+import com.twitter.timelines.util.MtlNormalizer
 import com.twitter.timelineservice.{thriftscala => tls}
+import com.twitter.ubs.{thriftscala => ubs}
 
 trait RescoringFactorProvider {
 
-  def selector(candidate: CandidateWithFeatures[TweetCandidate]): Boolean
+  def selector(query: PipelineQuery, candidate: CandidateWithFeatures[TweetCandidate]): Boolean
 
   def factor(
     query: PipelineQuery,
@@ -31,43 +25,21 @@ trait RescoringFactorProvider {
   def apply(
     query: PipelineQuery,
     candidate: CandidateWithFeatures[TweetCandidate],
-  ): Double = if (selector(candidate)) factor(query, candidate) else 1.0
+  ): Double = if (selector(query, candidate)) factor(query, candidate) else 1.0
 }
 
-/**
- * Re-scoring multiplier to apply to authors who are eligible subscription content creators
- */
-object RescoreCreators extends RescoringFactorProvider {
+case class RescoreListwise(listwiseRescoringMap: Map[Long, Double])
+    extends RescoringFactorProvider {
 
-  def selector(candidate: CandidateWithFeatures[TweetCandidate]): Boolean =
-    candidate.features.getOrElse(AuthorIsCreatorFeature, false) &&
-      CandidatesUtil.isOriginalTweet(candidate)
-
-  def factor(
+  override def selector(
     query: PipelineQuery,
     candidate: CandidateWithFeatures[TweetCandidate]
-  ): Double =
-    if (candidate.features.getOrElse(InNetworkFeature, false))
-      query.params(CreatorInNetworkMultiplierParam)
-    else query.params(CreatorOutOfNetworkMultiplierParam)
-}
+  ): Boolean = listwiseRescoringMap.contains(candidate.candidate.id)
 
-/**
- * Re-scoring multiplier to apply to authors who are verified by Twitter Blue
- */
-object RescoreBlueVerified extends RescoringFactorProvider {
-
-  def selector(candidate: CandidateWithFeatures[TweetCandidate]): Boolean =
-    candidate.features.getOrElse(AuthorIsBlueVerifiedFeature, false) &&
-      CandidatesUtil.isOriginalTweet(candidate)
-
-  def factor(
+  override def factor(
     query: PipelineQuery,
     candidate: CandidateWithFeatures[TweetCandidate]
-  ): Double =
-    if (candidate.features.getOrElse(InNetworkFeature, false))
-      query.params(BlueVerifiedAuthorInNetworkMultiplierParam)
-    else query.params(BlueVerifiedAuthorOutOfNetworkMultiplierParam)
+  ): Double = listwiseRescoringMap(candidate.candidate.id)
 }
 
 /**
@@ -75,7 +47,7 @@ object RescoreBlueVerified extends RescoringFactorProvider {
  */
 object RescoreOutOfNetwork extends RescoringFactorProvider {
 
-  def selector(candidate: CandidateWithFeatures[TweetCandidate]): Boolean =
+  def selector(query: PipelineQuery, candidate: CandidateWithFeatures[TweetCandidate]): Boolean =
     !candidate.features.getOrElse(InNetworkFeature, false)
 
   def factor(
@@ -89,59 +61,44 @@ object RescoreOutOfNetwork extends RescoringFactorProvider {
  */
 object RescoreReplies extends RescoringFactorProvider {
 
-  private val ScaleFactor = 0.75
-
-  def selector(candidate: CandidateWithFeatures[TweetCandidate]): Boolean =
+  def selector(query: PipelineQuery, candidate: CandidateWithFeatures[TweetCandidate]): Boolean =
     candidate.features.getOrElse(InReplyToTweetIdFeature, None).isDefined
 
   def factor(
     query: PipelineQuery,
     candidate: CandidateWithFeatures[TweetCandidate]
-  ): Double = ScaleFactor
+  ): Double = query.params(ReplyScaleFactorParam)
 }
 
 /**
  * Re-scoring multiplier to calibrate multi-tasks learning model prediction
  */
-object RescoreMTLNormalization extends RescoringFactorProvider {
+case class RescoreMTLNormalization(mtlNormalizer: MtlNormalizer) extends RescoringFactorProvider {
 
-  private val ScaleFactor = 1.0
-
-  def selector(candidate: CandidateWithFeatures[TweetCandidate]): Boolean = {
-    candidate.features.contains(HomeFeatures.FocalTweetAuthorIdFeature)
-  }
+  def selector(query: PipelineQuery, candidate: CandidateWithFeatures[TweetCandidate]): Boolean =
+    query.params(MtlNormalization.EnableMtlNormalizationParam)
 
   def factor(
     query: PipelineQuery,
     candidate: CandidateWithFeatures[TweetCandidate]
-  ): Double = ScaleFactor
-}
-
-/**
- * Re-scoring multiplier to apply to multiple tweets from the same author
- */
-case class RescoreAuthorDiversity(diversityDiscounts: Map[Long, Double])
-    extends RescoringFactorProvider {
-
-  def selector(candidate: CandidateWithFeatures[TweetCandidate]): Boolean =
-    diversityDiscounts.contains(candidate.candidate.id)
-
-  def factor(
-    query: PipelineQuery,
-    candidate: CandidateWithFeatures[TweetCandidate]
-  ): Double = diversityDiscounts(candidate.candidate.id)
+  ): Double = mtlNormalizer(
+    attribute = candidate.features.getOrElse(AuthorFollowersFeature, None),
+    retweet = candidate.features.getOrElse(SourceTweetIdFeature, None).isDefined,
+    reply = candidate.features.getOrElse(InReplyToTweetIdFeature, None).isDefined
+  )
 }
 
 case class RescoreFeedbackFatigue(query: PipelineQuery) extends RescoringFactorProvider {
 
-  def selector(candidate: CandidateWithFeatures[TweetCandidate]): Boolean = true
+  def selector(query: PipelineQuery, candidate: CandidateWithFeatures[TweetCandidate]): Boolean =
+    true
 
   private val feedbackEntriesByEngagementType =
     query.features
       .getOrElse(FeatureMap.empty).getOrElse(FeedbackHistoryFeature, Seq.empty)
       .filter { entry =>
         val timeSinceFeedback = query.queryTime.minus(entry.timestamp)
-        timeSinceFeedback < FeedbackFatigueScorer.DurationForFiltering + FeedbackFatigueScorer.DurationForDiscounting &&
+        timeSinceFeedback < FeedbackFatigueScorer.DurationForDiscounting &&
         entry.feedbackType == tls.FeedbackType.SeeFewer
       }.groupBy(_.engagementType)
 
@@ -177,4 +134,26 @@ case class RescoreFeedbackFatigue(query: PipelineQuery) extends RescoringFactorP
       retweetersToDiscount
     )
   }
+}
+
+/**
+ * Disabled in production
+ */
+object RescoreLiveContent extends RescoringFactorProvider {
+
+  private val MinFollowers = 1000000
+
+  def selector(query: PipelineQuery, candidate: CandidateWithFeatures[TweetCandidate]): Boolean = {
+    (
+      candidate.features.getOrElse(SpaceStateFeature, None).contains(ubs.BroadcastState.Running) ||
+      candidate.features.getOrElse(BroadcastStateFeature, None).contains(ubs.BroadcastState.Running)
+    ) &&
+    candidate.features.getOrElse(InNetworkFeature, false) &&
+    candidate.features.getOrElse(AuthorFollowersFeature, None).exists(_ > MinFollowers)
+  }
+
+  def factor(
+    query: PipelineQuery,
+    candidate: CandidateWithFeatures[TweetCandidate]
+  ): Double = query.params(LiveContentScaleFactorParam)
 }

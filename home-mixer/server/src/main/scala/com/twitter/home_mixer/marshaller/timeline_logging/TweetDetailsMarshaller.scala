@@ -3,7 +3,7 @@ package com.twitter.home_mixer.marshaller.timeline_logging
 import com.twitter.home_mixer.model.HomeFeatures.AuthorIdFeature
 import com.twitter.home_mixer.model.HomeFeatures.SourceTweetIdFeature
 import com.twitter.home_mixer.model.HomeFeatures.SourceUserIdFeature
-import com.twitter.home_mixer.model.HomeFeatures.SuggestTypeFeature
+import com.twitter.home_mixer.model.HomeFeatures.ServedTypeFeature
 import com.twitter.product_mixer.component_library.model.presentation.urt.UrtItemPresentation
 import com.twitter.product_mixer.component_library.model.presentation.urt.UrtModulePresentation
 import com.twitter.product_mixer.core.functional_component.marshaller.response.urt.metadata.GeneralContextTypeMarshaller
@@ -39,7 +39,7 @@ object TweetDetailsMarshaller {
     thriftlog.TweetDetails(
       sourceTweetId = candidate.features.getOrElse(SourceTweetIdFeature, None),
       socialContextType = socialContextType,
-      suggestType = candidate.features.getOrElse(SuggestTypeFeature, None).map(_.name),
+      suggestType = Some(candidate.features.get(ServedTypeFeature).name),
       authorId = candidate.features.getOrElse(AuthorIdFeature, None),
       sourceAuthorId = candidate.features.getOrElse(SourceUserIdFeature, None)
     )

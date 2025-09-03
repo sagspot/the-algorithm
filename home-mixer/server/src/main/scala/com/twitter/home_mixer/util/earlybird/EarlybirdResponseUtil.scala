@@ -1,5 +1,6 @@
 package com.twitter.home_mixer.util.earlybird
 
+import com.twitter.product_mixer.core.util.OffloadFuturePools
 import com.twitter.search.common.constants.{thriftscala => scc}
 import com.twitter.search.common.features.{thriftscala => sc}
 import com.twitter.search.common.schema.earlybird.EarlybirdFieldConstants.EarlybirdFieldConstant
@@ -7,30 +8,32 @@ import com.twitter.search.common.schema.earlybird.EarlybirdFieldConstants.Earlyb
 import com.twitter.search.common.util.lang.ThriftLanguageUtil
 import com.twitter.search.earlybird.{thriftscala => eb}
 import com.twitter.timelines.earlybird.common.utils.InNetworkEngagement
+import com.twitter.util.Future
 
 object EarlybirdResponseUtil {
 
   private[earlybird] val Mentions: String = "mentions"
-  private[earlybird] val Hashtags: String = "hashtags"
   private val CharsToRemoveFromMentions: Set[Char] = "@".toSet
-  private val CharsToRemoveFromHashtags: Set[Char] = "#".toSet
 
   // Default value of settings of ThriftTweetFeatures.
   private[earlybird] val DefaultEarlybirdFeatures: sc.ThriftTweetFeatures = sc.ThriftTweetFeatures()
   private[earlybird] val DefaultCount = 0
   private[earlybird] val DefaultLanguage = 0
   private[earlybird] val DefaultScore = 0.0
+  private[earlybird] val DefaultEBResponseProcessParallelism = 32
 
-  private[earlybird] def getTweetCountByAuthorId(
+  def getTweetCountByAuthorId(
     searchResults: Seq[eb.ThriftSearchResult]
   ): Map[Long, Int] = {
-    searchResults
-      .groupBy { result =>
-        result.metadata.map(_.fromUserId).getOrElse(0L)
-      }.mapValues(_.size).withDefaultValue(0)
+    val tweetCounts = scala.collection.mutable.Map.empty[Long, Int]
+    searchResults.foreach { result =>
+      val authorId = result.metadata.map(_.fromUserId).getOrElse(0L)
+      tweetCounts(authorId) = tweetCounts.getOrElse(authorId, 0) + 1
+    }
+    tweetCounts.toMap.withDefaultValue(0)
   }
 
-  private[earlybird] def getLanguage(uiLanguageCode: Option[String]): Option[scc.ThriftLanguage] = {
+  def getLanguage(uiLanguageCode: Option[String]): Option[scc.ThriftLanguage] = {
     uiLanguageCode.flatMap { languageCode =>
       scc.ThriftLanguage.get(ThriftLanguageUtil.getThriftLanguageOf(languageCode).getValue)
     }
@@ -39,11 +42,6 @@ object EarlybirdResponseUtil {
   private def getMentions(result: eb.ThriftSearchResult): Seq[String] = {
     val facetLabels = result.metadata.flatMap(_.facetLabels).getOrElse(Seq.empty)
     getFacets(facetLabels, Mentions, CharsToRemoveFromMentions)
-  }
-
-  private def getHashtags(result: eb.ThriftSearchResult): Seq[String] = {
-    val facetLabels = result.metadata.flatMap(_.facetLabels).getOrElse(Seq.empty)
-    getFacets(facetLabels, Hashtags, CharsToRemoveFromHashtags)
   }
 
   private def getFacets(
@@ -136,33 +134,41 @@ object EarlybirdResponseUtil {
     uiLanguageCode: Option[String] = None,
     followedUserIds: Set[Long],
     mutuallyFollowingUserIds: Set[Long],
-    searchResults: Seq[eb.ThriftSearchResult],
-    sourceTweetSearchResults: Seq[eb.ThriftSearchResult],
-  ): Map[Long, sc.ThriftTweetFeatures] = {
+    idToSearchResults: Map[Long, eb.ThriftSearchResult]
+  ): Future[Map[Long, sc.ThriftTweetFeatures]] = {
 
-    val allSearchResults = searchResults ++ sourceTweetSearchResults
-    val sourceTweetSearchResultById =
-      sourceTweetSearchResults.map(result => (result.id -> result)).toMap
+    val searchResults = idToSearchResults.values.toSeq
     val inNetworkEngagement =
-      InNetworkEngagement(followedUserIds.toSeq, mutuallyFollowingUserIds, allSearchResults)
-    searchResults.map { searchResult =>
-      val features = getThriftTweetFeaturesFromSearchResult(
-        searcherUserId,
-        screenName,
-        userLanguages,
-        getLanguage(uiLanguageCode),
-        getTweetCountByAuthorId(searchResults),
-        followedUserIds,
-        mutuallyFollowingUserIds,
-        sourceTweetSearchResultById,
-        inNetworkEngagement,
-        searchResult
-      )
-      (searchResult.id -> features)
-    }.toMap
+      InNetworkEngagement(followedUserIds.toSeq, mutuallyFollowingUserIds, searchResults)
+    val tweetCountByAuthorId = getTweetCountByAuthorId(searchResults)
+    val uiLanguage = getLanguage(uiLanguageCode)
+    val idWithFeaturesSeqFu = OffloadFuturePools.parallelize[
+      eb.ThriftSearchResult,
+      (Long, sc.ThriftTweetFeatures)
+    ](
+      inputSeq = searchResults,
+      transformer = (searchResult: eb.ThriftSearchResult) =>
+        (
+          searchResult.id,
+          getThriftTweetFeaturesFromSearchResult(
+            searcherUserId,
+            screenName,
+            userLanguages,
+            uiLanguage,
+            tweetCountByAuthorId,
+            followedUserIds,
+            mutuallyFollowingUserIds,
+            idToSearchResults,
+            inNetworkEngagement,
+            searchResult
+          )),
+      parallelism = DefaultEBResponseProcessParallelism,
+    )
+    idWithFeaturesSeqFu.map(idWithFeaturesSeq =>
+      idWithFeaturesSeq.map(idWithFeatures => idWithFeatures._1 -> idWithFeatures._2).toMap)
   }
 
-  private[earlybird] def getThriftTweetFeaturesFromSearchResult(
+  def getThriftTweetFeaturesFromSearchResult(
     searcherUserId: Long,
     screenName: Option[String],
     userLanguages: Seq[scc.ThriftLanguage],
@@ -170,7 +176,7 @@ object EarlybirdResponseUtil {
     tweetCountByAuthorId: Map[Long, Int],
     followedUserIds: Set[Long],
     mutuallyFollowingUserIds: Set[Long],
-    sourceTweetSearchResultById: Map[Long, eb.ThriftSearchResult],
+    idToSearchResults: Map[Long, eb.ThriftSearchResult],
     inNetworkEngagement: InNetworkEngagement,
     searchResult: eb.ThriftSearchResult,
   ): sc.ThriftTweetFeatures = {
@@ -185,7 +191,7 @@ object EarlybirdResponseUtil {
         tweetCountByAuthorId,
         followedUserIds,
         mutuallyFollowingUserIds,
-        sourceTweetSearchResultById,
+        idToSearchResults,
         inNetworkEngagement,
         searchResult
       )(_)
@@ -204,10 +210,6 @@ object EarlybirdResponseUtil {
       .map { metadata =>
         val isRetweet = metadata.isRetweet.getOrElse(false)
         val isReply = metadata.isReply.getOrElse(false)
-
-        // Facets.
-        val mentions = getMentions(result)
-        val hashtags = getHashtags(result)
 
         val searchResultSchemaFeatures = metadata.extraMetadata.flatMap(_.features)
         val booleanSearchResultSchemaFeatures = searchResultSchemaFeatures.flatMap(_.boolValues)
@@ -337,8 +339,6 @@ object EarlybirdResponseUtil {
           lastQuoteSinceCreationHrs =
             getIntOptFeature(LAST_QUOTE_SINCE_CREATION_HRS, intSearchResultSchemaFeatures),
           likedByUserIds = metadata.extraMetadata.flatMap(_.likedByUserIds),
-          mentionsList = if (mentions.nonEmpty) Some(mentions) else None,
-          hashtagsList = if (hashtags.nonEmpty) Some(hashtags) else None,
           isComposerSourceCamera =
             getBooleanOptFeature(COMPOSER_SOURCE_IS_CAMERA_FLAG, booleanSearchResultSchemaFeatures),
         )
@@ -356,7 +356,7 @@ object EarlybirdResponseUtil {
     tweetCountByAuthorId: Map[Long, Int],
     followedUserIds: Set[Long],
     mutuallyFollowingUserIds: Set[Long],
-    sourceTweetSearchResultById: Map[Long, eb.ThriftSearchResult],
+    idToSearchResults: Map[Long, eb.ThriftSearchResult],
     inNetworkEngagement: InNetworkEngagement,
     result: eb.ThriftSearchResult
   )(
@@ -366,7 +366,7 @@ object EarlybirdResponseUtil {
       .map { metadata =>
         val isRetweet = metadata.isRetweet.getOrElse(false)
         val sourceTweet =
-          if (isRetweet) sourceTweetSearchResultById.get(metadata.sharedStatusId)
+          if (isRetweet) idToSearchResults.get(metadata.sharedStatusId)
           else None
         val mentionsInSourceTweet = sourceTweet.map(getMentions).getOrElse(Seq.empty)
 

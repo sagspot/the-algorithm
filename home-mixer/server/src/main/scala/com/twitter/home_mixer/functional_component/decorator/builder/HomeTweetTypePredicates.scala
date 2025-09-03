@@ -2,6 +2,8 @@ package com.twitter.home_mixer.functional_component.decorator.builder
 
 import com.twitter.conversions.DurationOps._
 import com.twitter.home_mixer.model.HomeFeatures._
+import com.twitter.home_mixer.{thriftscala => hmt}
+import com.twitter.product_mixer.component_library.feature.location.LocationSharedFeatures.LocationIdFeature
 import com.twitter.product_mixer.core.feature.featuremap.FeatureMap
 import com.twitter.product_mixer.core.model.marshalling.response.urt.metadata.BasicTopicContextFunctionalityType
 import com.twitter.product_mixer.core.model.marshalling.response.urt.metadata.RecommendationTopicContextFunctionalityType
@@ -11,19 +13,19 @@ import com.twitter.tweetypie.{thriftscala => tpt}
 object HomeTweetTypePredicates {
 
   /**
-   * IMPORTANT: Please avoid logging tweet types that are tied to sensitive
-   * internal author information / labels (e.g. blink labels, abuse labels, or geo-location).
+   * The predicates defined in this file are used purely for metrics tracking purposes to 
+   * measure how often we serve posts with various attributes.
    */
-  private[this] val CandidatePredicates: Seq[(String, FeatureMap => Boolean)] = Seq(
+  private val CandidatePredicates: Seq[(String, FeatureMap => Boolean)] = Seq(
     ("with_candidate", _ => true),
     ("retweet", _.getOrElse(IsRetweetFeature, false)),
     ("reply", _.getOrElse(InReplyToTweetIdFeature, None).nonEmpty),
-    ("image", _.getOrElse(EarlybirdFeature, None).exists(_.hasImage)),
-    ("video", _.getOrElse(EarlybirdFeature, None).exists(_.hasVideo)),
+    ("image", _.getOrElse(HasImageFeature, false)),
+    ("video", _.getOrElse(HasVideoFeature, false)),
     ("link", _.getOrElse(EarlybirdFeature, None).exists(_.hasVisibleLink)),
     ("quote", _.getOrElse(EarlybirdFeature, None).exists(_.hasQuote.contains(true))),
     ("like_social_context", _.getOrElse(NonSelfFavoritedByUserIdsFeature, Seq.empty).nonEmpty),
-    ("protected", _.getOrElse(EarlybirdFeature, None).exists(_.isProtected)),
+    ("protected", _.getOrElse(AuthorIsProtectedFeature, false)),
     (
       "has_exclusive_conversation_author_id",
       _.getOrElse(ExclusiveConversationAuthorIdFeature, None).nonEmpty),
@@ -56,9 +58,7 @@ object HomeTweetTypePredicates {
       "served_size_between_50_and_100",
       _.getOrElse(ServedSizeFeature, None).exists(size => size >= 50 && size < 100)),
     ("authored_by_contextual_user", _.getOrElse(AuthoredByContextualUserFeature, false)),
-    (
-      "is_self_thread_tweet",
-      _.getOrElse(ConversationFeature, None).exists(_.isSelfThreadTweet.contains(true))),
+    ("is_self_thread_tweet", _.getOrElse(IsSelfThreadFeature, false)),
     ("has_ancestors", _.getOrElse(AncestorsFeature, Seq.empty).nonEmpty),
     ("full_scoring_succeeded", _.getOrElse(FullScoringSucceededFeature, false)),
     ("served_size_less_than_20", _.getOrElse(ServedSizeFeature, None).exists(_ < 20)),
@@ -94,9 +94,9 @@ object HomeTweetTypePredicates {
     ("is_utis_pos2", _.getOrElse(PositionFeature, None).exists(_ == 2)),
     ("is_utis_pos3", _.getOrElse(PositionFeature, None).exists(_ == 3)),
     ("is_utis_pos4", _.getOrElse(PositionFeature, None).exists(_ == 4)),
-    ("is_random_tweet", _.getOrElse(IsRandomTweetFeature, false)),
-    ("has_random_tweet_in_response", _.getOrElse(HasRandomTweetFeature, false)),
-    ("is_random_tweet_above_in_utis", _.getOrElse(IsRandomTweetAboveFeature, false)),
+    ("is_random_tweet", _ => false),
+    ("has_random_tweet_in_response", _ => false),
+    ("is_random_tweet_above_in_utis", _ => false),
     (
       "has_ancestor_authored_by_viewer",
       candidate =>
@@ -116,8 +116,8 @@ object HomeTweetTypePredicates {
         Map.empty[String, Double]).nonEmpty),
     (
       "tweet_age_less_than_15_seconds",
-      _.getOrElse(OriginalTweetCreationTimeFromSnowflakeFeature, None)
-        .exists(_.untilNow <= 15.seconds)),
+      _.getOrElse(TweetAgeFeature, None)
+        .exists(_ <= 15.seconds.inMillis)),
     (
       "less_than_1_hour_since_lnpt",
       _.getOrElse(LastNonPollingTimeFeature, None).exists(_.untilNow < 1.hour)),
@@ -193,13 +193,13 @@ object HomeTweetTypePredicates {
       "text_only",
       candidate =>
         candidate.getOrElse(HasDisplayedTextFeature, false) &&
-          !(candidate.getOrElse(EarlybirdFeature, None).exists(_.hasImage) ||
-            candidate.getOrElse(EarlybirdFeature, None).exists(_.hasVideo) ||
+          !(candidate.getOrElse(HasImageFeature, false) ||
+            candidate.getOrElse(HasVideoFeature, false) ||
             candidate.getOrElse(EarlybirdFeature, None).exists(_.hasCard))),
     (
       "image_only",
       candidate =>
-        candidate.getOrElse(EarlybirdFeature, None).exists(_.hasImage) &&
+        candidate.getOrElse(HasImageFeature, false) &&
           !candidate.getOrElse(HasDisplayedTextFeature, false)),
     ("has_1_image", _.getOrElse(NumImagesFeature, None).exists(_ == 1)),
     ("has_2_images", _.getOrElse(NumImagesFeature, None).exists(_ == 2)),
@@ -211,9 +211,7 @@ object HomeTweetTypePredicates {
       "has_liked_by_social_context",
       candidateFeatures =>
         candidateFeatures
-          .getOrElse(SGSValidLikedByUserIdsFeature, Seq.empty)
-          .exists(candidateFeatures
-            .getOrElse(PerspectiveFilteredLikedByUserIdsFeature, Seq.empty).toSet.contains)),
+          .getOrElse(ValidLikedByUserIdsFeature, Seq.empty).nonEmpty),
     (
       "has_followed_by_social_context",
       _.getOrElse(SGSValidFollowedByUserIdsFeature, Seq.empty).nonEmpty),
@@ -232,24 +230,323 @@ object HomeTweetTypePredicates {
     ("video_gt_60_sec", _.getOrElse(VideoDurationMsFeature, None).exists(_ > 60000)),
     (
       "tweet_age_lte_30_minutes",
-      _.getOrElse(OriginalTweetCreationTimeFromSnowflakeFeature, None)
-        .exists(_.untilNow <= 30.minutes)),
+      _.getOrElse(TweetAgeFeature, None)
+        .exists(_ <= 30.minutes.inMillis)),
     (
       "tweet_age_lte_1_hour",
-      _.getOrElse(OriginalTweetCreationTimeFromSnowflakeFeature, None)
-        .exists(_.untilNow <= 1.hour)),
+      _.getOrElse(TweetAgeFeature, None)
+        .exists(_ <= 1.hour.inMillis)),
     (
       "tweet_age_lte_6_hours",
-      _.getOrElse(OriginalTweetCreationTimeFromSnowflakeFeature, None)
-        .exists(_.untilNow <= 6.hours)),
+      _.getOrElse(TweetAgeFeature, None)
+        .exists(_ <= 6.hours.inMillis)),
     (
       "tweet_age_lte_12_hours",
-      _.getOrElse(OriginalTweetCreationTimeFromSnowflakeFeature, None)
-        .exists(_.untilNow <= 12.hours)),
+      _.getOrElse(TweetAgeFeature, None)
+        .exists(_ <= 12.hours.inMillis)),
     (
       "tweet_age_gte_24_hours",
-      _.getOrElse(OriginalTweetCreationTimeFromSnowflakeFeature, None)
-        .exists(_.untilNow >= 24.hours)),
+      _.getOrElse(TweetAgeFeature, None)
+        .exists(_ >= 24.hours.inMillis)),
+    ("author_is_blue_verified", _.getOrElse(AuthorIsBlueVerifiedFeature, false)),
+    ("author_is_gold_verified", _.getOrElse(AuthorIsGoldVerifiedFeature, false)),
+    ("author_is_gray_verified", _.getOrElse(AuthorIsGrayVerifiedFeature, false)),
+    ("author_is_legacy_verified", _.getOrElse(AuthorIsLegacyVerifiedFeature, false)),
+    ("author_is_creator", _.getOrElse(AuthorIsCreatorFeature, false)),
+    (
+      "viral_content_creator_in_network",
+      candidate =>
+        candidate.getOrElse(ViralContentCreatorFeature, false) &&
+          candidate.getOrElse(InNetworkFeature, true)),
+    (
+      "viral_content_creator_out_of_network",
+      candidate =>
+        candidate.getOrElse(ViralContentCreatorFeature, false) &&
+          !candidate.getOrElse(InNetworkFeature, true)),
+    (
+      "grok_content_creator_in_network",
+      candidate =>
+        candidate.getOrElse(GrokContentCreatorFeature, false) &&
+          candidate.getOrElse(InNetworkFeature, true)),
+    (
+      "grok_content_creator_out_of_network",
+      candidate =>
+        candidate.getOrElse(GrokContentCreatorFeature, false) &&
+          !candidate.getOrElse(InNetworkFeature, true)),
+    (
+      "gork_content_creator_in_network",
+      candidate =>
+        candidate.getOrElse(GorkContentCreatorFeature, false) &&
+          candidate.getOrElse(InNetworkFeature, true)),
+    (
+      "gork_content_creator_out_of_network",
+      candidate =>
+        candidate.getOrElse(GorkContentCreatorFeature, false) &&
+          !candidate.getOrElse(InNetworkFeature, true)),
+    ("has_location", _.getOrElse(LocationIdFeature, None).isDefined),
+    ("article", _.getOrElse(IsArticleFeature, false)),
+    (
+      "grok_category_news",
+      _.getOrElse(GrokTopCategoryFeature, None).contains(<removed_id>)),
+    (
+      "grok_category_sports",
+      _.getOrElse(GrokTopCategoryFeature, None).contains(<removed_id>)),
+    ("grok_category_entertainment", _ => false),
+    (
+      "grok_category_business_&_finance",
+      _.getOrElse(GrokTopCategoryFeature, None).contains(<removed_id>)),
+    (
+      "grok_category_technology",
+      _.getOrElse(GrokTopCategoryFeature, None).contains(<removed_id>)),
+    (
+      "grok_category_gaming",
+      _.getOrElse(GrokTopCategoryFeature, None).contains(<removed_id>)),
+    (
+      "grok_category_movies_&_tv",
+      _.getOrElse(GrokTopCategoryFeature, None).contains(<removed_id>)),
+    (
+      "grok_category_music",
+      _.getOrElse(GrokTopCategoryFeature, None).contains(<removed_id>)),
+    (
+      "grok_category_travel",
+      _.getOrElse(GrokTopCategoryFeature, None).contains(<removed_id>)),
+    (
+      "grok_category_food",
+      _.getOrElse(GrokTopCategoryFeature, None).contains(<removed_id>)),
+    (
+      "grok_category_fashion",
+      _.getOrElse(GrokTopCategoryFeature, None).contains(<removed_id>)),
+    (
+      "grok_category_health_&_fitness",
+      _.getOrElse(GrokTopCategoryFeature, None).contains(<removed_id>)),
+    (
+      "grok_category_anime",
+      _.getOrElse(GrokTopCategoryFeature, None).contains(<removed_id>)),
+    (
+      "grok_category_celebrity",
+      _.getOrElse(GrokTopCategoryFeature, None).contains(<removed_id>)),
+    (
+      "grok_category_cryptocurrency",
+      _.getOrElse(GrokTopCategoryFeature, None).contains(<removed_id>)),
+    (
+      "grok_category_science",
+      _.getOrElse(GrokTopCategoryFeature, None).contains(<removed_id>)),
+    (
+      "grok_category_memes",
+      _.getOrElse(GrokTopCategoryFeature, None).contains(<removed_id>)),
+    ("grok_category_art", _.getOrElse(GrokTopCategoryFeature, None).contains(<removed_id>)),
+    (
+      "grok_category_religion",
+      _.getOrElse(GrokTopCategoryFeature, None).contains(<removed_id>)),
+    (
+      "grok_category_shopping",
+      _.getOrElse(GrokTopCategoryFeature, None).contains(<removed_id>)),
+    (
+      "grok_category_cars",
+      _.getOrElse(GrokTopCategoryFeature, None).contains(<removed_id>)),
+    (
+      "grok_category_aviation",
+      _.getOrElse(GrokTopCategoryFeature, None).contains(<removed_id>)),
+    (
+      "grok_category_motorcycles",
+      _.getOrElse(GrokTopCategoryFeature, None).contains(<removed_id>)),
+    (
+      "grok_category_beauty",
+      _.getOrElse(GrokTopCategoryFeature, None).contains(<removed_id>)),
+    (
+      "grok_category_nature_&_outdoors",
+      _.getOrElse(GrokTopCategoryFeature, None).contains(<removed_id>)),
+    (
+      "grok_category_pets",
+      _.getOrElse(GrokTopCategoryFeature, None).contains(<removed_id>)),
+    (
+      "grok_category_relationships",
+      _.getOrElse(GrokTopCategoryFeature, None).contains(<removed_id>)),
+    (
+      "grok_category_home_&_garden",
+      _.getOrElse(GrokTopCategoryFeature, None).contains(<removed_id>)),
+    (
+      "grok_category_career",
+      _.getOrElse(GrokTopCategoryFeature, None).contains(<removed_id>)),
+    (
+      "grok_category_dance",
+      _.getOrElse(GrokTopCategoryFeature, None).contains(<removed_id>)),
+    (
+      "grok_category_education",
+      _.getOrElse(GrokTopCategoryFeature, None).contains(<removed_id>)),
+    (
+      "grok_category_podcasts",
+      _.getOrElse(GrokTopCategoryFeature, None).contains(<removed_id>)),
+    (
+      "grok_category_streaming",
+      _.getOrElse(GrokTopCategoryFeature, None).contains(<removed_id>)),
+    ("grok_is_gore", _.getOrElse(GrokIsGoreFeature, None).getOrElse(false)),
+    ("grok_is_nsfw", _.getOrElse(GrokIsNsfwFeature, None).getOrElse(false)),
+    ("grok_is_spam", _.getOrElse(GrokIsSpamFeature, None).getOrElse(false)),
+    ("grok_is_violent", _.getOrElse(GrokIsViolentFeature, None).getOrElse(false)),
+    ("grok_is_low_quality", _.getOrElse(GrokIsLowQualityFeature, None).getOrElse(false)),
+    ("grok_is_ocr", _.getOrElse(GrokIsOcrFeature, None).getOrElse(false)),    
+    (
+      "grok_politics_neutral", // Purely for metrics tracking. Does not affect the recommendations.
+      _.getOrElse(GrokPoliticalInclinationFeature, None).contains(hmt.PoliticalInclination.Neutral)
+    ),
+    (
+      "grok_politics_left", // Purely for metrics tracking. Does not affect the recommendations.
+      _.getOrElse(GrokPoliticalInclinationFeature, None).contains(hmt.PoliticalInclination.Left)
+    ),
+    (
+      "grok_politics_right", // Purely for metrics tracking. Does not affect the recommendations.
+      _.getOrElse(GrokPoliticalInclinationFeature, None).contains(hmt.PoliticalInclination.Right)
+    ),
+    ("is_slop_lte_0", _.getOrElse(SlopAuthorScoreFeature, None).exists(_ <= 0.0)),
+    ("is_slop_lte_0_2", _.getOrElse(SlopAuthorScoreFeature, None).exists(_ <= 0.2)),
+    ("is_slop_gt_0", _.getOrElse(SlopAuthorScoreFeature, None).exists(_ > 0.0)),
+    ("is_slop_gt_0_2", _.getOrElse(SlopAuthorScoreFeature, None).exists(_ > 0.2)),
+    ("is_slop_gt_0_4", _.getOrElse(SlopAuthorScoreFeature, None).exists(_ > 0.4)),
+    ("is_slop_gt_0_6", _.getOrElse(SlopAuthorScoreFeature, None).exists(_ > 0.6)),
+    (
+      "unique_author_ratio_lte_50_pct",
+      features => {
+        val uniqueAuthorCount = features.getOrElse(UniqueAuthorCountFeature, None).getOrElse(0)
+        val servedSize = features.getOrElse(ServedSizeFeature, None).getOrElse(1)
+        uniqueAuthorCount.toDouble / servedSize <= 0.5
+      }
+    ),
+    ("unique_author_lte_5", _.getOrElse(UniqueAuthorCountFeature, None).exists(_ <= 5)),
+    ("unique_author_lte_10", _.getOrElse(UniqueAuthorCountFeature, None).exists(_ <= 10)),
+    ("unique_author_lte_15", _.getOrElse(UniqueAuthorCountFeature, None).exists(_ <= 15)),
+    (
+      "single_author_gte_25_pct",
+      features => {
+        val maxCount = features.getOrElse(MaxSingleAuthorCountFeature, None).getOrElse(0)
+        val servedSize = features.getOrElse(ServedSizeFeature, None).getOrElse(0)
+        servedSize > 0 && maxCount.toDouble / servedSize >= 0.25
+      }),
+    (
+      "single_author_gte_50_pct",
+      features => {
+        val maxCount = features.getOrElse(MaxSingleAuthorCountFeature, None).getOrElse(0)
+        val servedSize = features.getOrElse(ServedSizeFeature, None).getOrElse(0)
+        servedSize > 0 && maxCount.toDouble / servedSize >= 0.5
+      }),
+    (
+      "unique_category_ratio_lte_50_pct",
+      features => {
+        val uniqueAuthorCount = features.getOrElse(UniqueCategoryCountFeature, None).getOrElse(0)
+        val servedSize = features.getOrElse(ServedSizeFeature, None).getOrElse(1)
+        uniqueAuthorCount.toDouble / servedSize <= 0.5
+      }
+    ),
+    ("unique_category_lte_5", _.getOrElse(UniqueCategoryCountFeature, None).exists(_ <= 5)),
+    ("unique_category_lte_10", _.getOrElse(UniqueCategoryCountFeature, None).exists(_ <= 10)),
+    ("unique_category_lte_15", _.getOrElse(UniqueCategoryCountFeature, None).exists(_ <= 15)),
+    (
+      "single_category_gte_25_pct",
+      features => {
+        val maxCount = features.getOrElse(MaxSingleCategoryCountFeature, None).getOrElse(0)
+        val servedSize = features.getOrElse(ServedSizeFeature, None).getOrElse(0)
+        servedSize > 0 && maxCount.toDouble / servedSize >= 0.25
+      }),
+    (
+      "single_category_gte_50_pct",
+      features => {
+        val maxCount = features.getOrElse(MaxSingleCategoryCountFeature, None).getOrElse(0)
+        val servedSize = features.getOrElse(ServedSizeFeature, None).getOrElse(0)
+        servedSize > 0 && maxCount.toDouble / servedSize >= 0.5
+      }),
+    ("is_grokslopscore_low_1", _.getOrElse(GrokSlopScoreFeature, None).contains(1L)),
+    ("is_grokslopscore_med_2", _.getOrElse(GrokSlopScoreFeature, None).contains(2L)),
+    ("is_grokslopscore_high_3", _.getOrElse(GrokSlopScoreFeature, None).contains(3L)),
+    ("is_boosted", _.getOrElse(IsBoostedCandidateFeature, false)),
+    (
+      "has_source_signal_tweet_favorite",
+      _.getOrElse(SourceSignalFeature, None).exists(_.signalType.contains("TweetFavorite"))),
+    (
+      "has_source_signal_retweet",
+      _.getOrElse(SourceSignalFeature, None).exists(_.signalType.contains("Retweet"))),
+    (
+      "has_source_signal_reply",
+      _.getOrElse(SourceSignalFeature, None).exists(_.signalType.contains("Reply"))),
+    (
+      "has_source_signal_tweet_bookmark_v1",
+      _.getOrElse(SourceSignalFeature, None).exists(_.signalType.contains("TweetBookmarkV1"))),
+    (
+      "has_source_signal_original_tweet",
+      _.getOrElse(SourceSignalFeature, None).exists(_.signalType.contains("OriginalTweet"))),
+    (
+      "has_source_signal_account_follow",
+      _.getOrElse(SourceSignalFeature, None).exists(_.signalType.contains("AccountFollow"))),
+    (
+      "has_source_signal_tweet_share_v1",
+      _.getOrElse(SourceSignalFeature, None).exists(_.signalType.contains("TweetShareV1"))),
+    (
+      "has_source_signal_tweet_photo_expand",
+      _.getOrElse(SourceSignalFeature, None).exists(_.signalType.contains("TweetPhotoExpand"))),
+    (
+      "has_source_signal_search_tweet_click",
+      _.getOrElse(SourceSignalFeature, None).exists(_.signalType.contains("SearchTweetClick"))),
+    (
+      "has_source_signal_profile_tweet_click",
+      _.getOrElse(SourceSignalFeature, None).exists(_.signalType.contains("ProfileTweetClick"))),
+    (
+      "has_source_signal_tweet_video_open",
+      _.getOrElse(SourceSignalFeature, None).exists(_.signalType.contains("TweetVideoOpen"))),
+    (
+      "has_source_signal_video_view_90d_quality_v1_all_surfaces",
+      _.getOrElse(SourceSignalFeature, None)
+        .exists(_.signalType.contains("VideoView90dQualityV1AllSurfaces"))),
+    (
+      "has_source_signal_video_view_90d_quality_v2",
+      _.getOrElse(SourceSignalFeature, None)
+        .exists(_.signalType.contains("VideoView90dQualityV2"))),
+    (
+      "has_source_signal_video_view_90d_quality_v2_visibility_75",
+      _.getOrElse(SourceSignalFeature, None)
+        .exists(_.signalType.contains("VideoView90dQualityV2Visibility75"))),
+    (
+      "has_source_signal_video_view_90d_quality_v2_visibility_100",
+      _.getOrElse(SourceSignalFeature, None)
+        .exists(_.signalType.contains("VideoView90dQualityV2Visibility100"))),
+    (
+      "has_source_signal_video_view_90d_quality_v3",
+      _.getOrElse(SourceSignalFeature, None)
+        .exists(_.signalType.contains("VideoView90dQualityV3"))),
+    (
+      "has_source_signal_account_block",
+      _.getOrElse(SourceSignalFeature, None).exists(_.signalType.contains("AccountBlock"))),
+    (
+      "has_source_signal_account_mute",
+      _.getOrElse(SourceSignalFeature, None).exists(_.signalType.contains("AccountMute"))),
+    (
+      "has_source_signal_tweet_report",
+      _.getOrElse(SourceSignalFeature, None).exists(_.signalType.contains("TweetReport"))),
+    (
+      "has_source_signal_tweet_dont_like",
+      _.getOrElse(SourceSignalFeature, None).exists(_.signalType.contains("TweetDontLike"))),
+    (
+      "has_source_signal_tweet_report_v2",
+      _.getOrElse(SourceSignalFeature, None).exists(_.signalType.contains("TweetReportV2"))),
+    (
+      "has_source_signal_tweet_dont_like_v2",
+      _.getOrElse(SourceSignalFeature, None).exists(_.signalType.contains("TweetDontLikeV2"))),
+    (
+      "has_source_signal_notification_open_and_click_v1",
+      _.getOrElse(SourceSignalFeature, None)
+        .exists(_.signalType.contains("NotificationOpenAndClickV1"))),
+    (
+      "has_source_signal_feedback_notrelevant",
+      _.getOrElse(SourceSignalFeature, None).exists(_.signalType.contains("FeedbackNotrelevant"))),
+    (
+      "has_source_signal_feedback_relevant",
+      _.getOrElse(SourceSignalFeature, None).exists(_.signalType.contains("FeedbackRelevant"))),
+    (
+      "has_source_signal_high_quality_source_tweet",
+      _.getOrElse(SourceSignalFeature, None)
+        .exists(_.signalType.contains("HighQualitySourceTweet"))),
+    (
+      "has_source_signal_high_quality_source_user",
+      _.getOrElse(SourceSignalFeature, None)
+        .exists(_.signalType.contains("HighQualitySourceUser"))),
   )
 
   val PredicateMap = CandidatePredicates.toMap

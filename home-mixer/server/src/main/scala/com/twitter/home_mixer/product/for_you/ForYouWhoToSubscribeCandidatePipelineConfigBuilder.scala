@@ -2,9 +2,9 @@ package com.twitter.home_mixer.product.for_you
 
 import com.twitter.home_mixer.functional_component.decorator.urt.builder.HomeWhoToSubscribeFeedbackActionInfoBuilder
 import com.twitter.home_mixer.functional_component.gate.DismissFatigueGate
+import com.twitter.home_mixer.functional_component.gate.RateLimitGate
 import com.twitter.home_mixer.functional_component.gate.TimelinesPersistenceStoreLastInjectionGate
 import com.twitter.home_mixer.model.HomeFeatures.DismissInfoFeature
-import com.twitter.home_mixer.model.HomeFeatures.PersistenceEntriesFeature
 import com.twitter.home_mixer.product.for_you.model.ForYouQuery
 import com.twitter.home_mixer.product.for_you.param.ForYouParam.EnableWhoToSubscribeCandidatePipelineParam
 import com.twitter.home_mixer.product.for_you.param.ForYouParam.WhoToSubscribeDisplayTypeIdParam
@@ -26,9 +26,9 @@ class ForYouWhoToSubscribeCandidatePipelineConfigBuilder @Inject() (
 
   def build(): WhoToSubscribeCandidatePipelineConfig[ForYouQuery] = {
     val gates: Seq[Gate[ForYouQuery]] = Seq(
+      RateLimitGate,
       TimelinesPersistenceStoreLastInjectionGate(
         WhoToSubscribeMinInjectionIntervalParam,
-        PersistenceEntriesFeature,
         EntityIdType.WhoToSubscribe
       ),
       DismissFatigueGate(SuggestType.WhoToSubscribe, DismissInfoFeature)

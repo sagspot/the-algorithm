@@ -1,8 +1,8 @@
 package com.twitter.home_mixer.product.subscribed
 
 import com.google.inject.Inject
-import com.twitter.home_mixer.functional_component.candidate_source.EarlybirdCandidateSource
 import com.twitter.home_mixer.product.subscribed.model.SubscribedQuery
+import com.twitter.product_mixer.component_library.candidate_source.earlybird.EarlybirdTweetCandidateSource
 import com.twitter.product_mixer.component_library.feature_hydrator.query.social_graph.SGSSubscribedUsersFeature
 import com.twitter.product_mixer.component_library.filter.TweetVisibilityFilter
 import com.twitter.product_mixer.component_library.gate.NonEmptySeqFeatureGate
@@ -21,7 +21,7 @@ import com.twitter.stitch.tweetypie.{TweetyPie => TweetypieStitchClient}
 import com.twitter.tweetypie.thriftscala.TweetVisibilityPolicy
 
 class SubscribedEarlybirdCandidatePipelineConfig @Inject() (
-  earlybirdCandidateSource: EarlybirdCandidateSource,
+  earlybirdTweetCandidateSource: EarlybirdTweetCandidateSource,
   tweetyPieStitchClient: TweetypieStitchClient,
   subscribedEarlybirdQueryTransformer: SubscribedEarlybirdQueryTransformer)
     extends CandidatePipelineConfig[
@@ -34,7 +34,7 @@ class SubscribedEarlybirdCandidatePipelineConfig @Inject() (
     CandidatePipelineIdentifier("SubscribedEarlybird")
 
   override val candidateSource: BaseCandidateSource[t.EarlybirdRequest, t.ThriftSearchResult] =
-    earlybirdCandidateSource
+    earlybirdTweetCandidateSource
 
   override val gates: Seq[Gate[SubscribedQuery]] = Seq(
     NonEmptySeqFeatureGate(SGSSubscribedUsersFeature)

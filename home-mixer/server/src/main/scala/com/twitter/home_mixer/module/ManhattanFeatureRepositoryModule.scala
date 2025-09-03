@@ -1,5 +1,6 @@
 package com.twitter.home_mixer.module
 
+import com.google.common.primitives.Longs
 import com.google.inject.Provides
 import com.twitter.bijection.Injection
 import com.twitter.bijection.scrooge.BinaryScalaCodec
@@ -16,7 +17,6 @@ import com.twitter.manhattan.v1.{thriftscala => mh}
 import com.twitter.ml.api.{thriftscala => ml}
 import com.twitter.ml.featurestore.lib.UserId
 import com.twitter.ml.featurestore.{thriftscala => fs}
-import com.twitter.onboarding.relevance.features.{thriftjava => rf}
 import com.twitter.product_mixer.shared_library.manhattan_client.ManhattanClientBuilder
 import com.twitter.scalding_internal.multiformat.format.keyval.KeyValInjection.ScalaBinaryThrift
 import com.twitter.search.common.constants.{thriftscala => scc}
@@ -33,8 +33,8 @@ import com.twitter.storage.client.manhattan.bijections.Bijections
 import com.twitter.storehaus_internal.manhattan.ManhattanClusters
 import com.twitter.timelines.author_features.v1.{thriftjava => af}
 import com.twitter.timelines.suggests.common.dense_data_record.{thriftscala => ddr}
-import com.twitter.user_session_store.{thriftscala => uss_scala}
 import com.twitter.user_session_store.{thriftjava => uss}
+import com.twitter.user_session_store.{thriftscala => uss_scala}
 import com.twitter.util.Duration
 import com.twitter.util.Try
 import java.nio.ByteBuffer
@@ -57,10 +57,32 @@ object ManhattanFeatureRepositoryModule extends TwitterModule {
     override def from(b: ByteBuffer): Try[Long] = ???
   }
 
+  private val LongUserIdKeyTransformer = new Transformer[Long, ByteBuffer] {
+    override def to(userId: Long): Try[ByteBuffer] = {
+      Try(ByteBuffer.wrap(Longs.toByteArray(userId)))
+    }
+    override def from(b: ByteBuffer): Try[Long] = ???
+  }
+
   private val FloatTensorTransformer = new Transformer[ByteBuffer, ml.FloatTensor] {
     override def to(input: ByteBuffer): Try[ml.FloatTensor] = {
       val floatTensor = TensorFlowUtil.embeddingByteBufferToFloatTensor(input)
       Try(floatTensor)
+    }
+    override def from(b: ml.FloatTensor): Try[ByteBuffer] = ???
+  }
+
+  private val EmbeddingTransformer = new Transformer[ByteBuffer, ml.FloatTensor] {
+    override def to(input: ByteBuffer): Try[ml.FloatTensor] = {
+      Try.fromScala(
+        Bijections
+          .BinaryScalaInjection(ml.Embedding).andThen(Bijections.byteBuffer2Buf.inverse).invert(
+            input).map { embedding =>
+            embedding.tensor.map { tensor =>
+              TensorFlowUtil.embeddingNoHeaderByteBufferToFloatTensor(tensor.content)
+            }.get
+          }
+      )
     }
 
     override def from(b: ml.FloatTensor): Try[ByteBuffer] = ???
@@ -137,29 +159,6 @@ object ManhattanFeatureRepositoryModule extends TwitterModule {
   }
 
   // non-cached manhattan repositories
-
-  @Provides
-  @Singleton
-  @Named(MetricCenterUserCountingFeatureRepository)
-  def providesMetricCenterUserCountingFeatureRepository(
-    @Named(ManhattanStarbuckClient) client: mh.ManhattanCoordinator.MethodPerEndpoint
-  ): KeyValueRepository[Seq[Long], Long, rf.MCUserCountingFeatures] = {
-
-    val valueTransformer = ThriftCodec
-      .toBinary[rf.MCUserCountingFeatures]
-      .toByteBufferTransformer()
-      .flip
-
-    batchedManhattanKeyValueRepository[Long, rf.MCUserCountingFeatures](
-      client = client,
-      keyTransformer = LongKeyTransformer,
-      valueTransformer = valueTransformer,
-      appId = "wtf_ml",
-      dataset = "mc_user_counting_features_v0_starbuck",
-      timeoutInMillis = 100
-    )
-  }
-
   /**
    * A repository of the offline aggregate feature metadata necessary to decode
    * DenseCompactDataRecords.
@@ -218,7 +217,7 @@ object ManhattanFeatureRepositoryModule extends TwitterModule {
   @Singleton
   @Named(RealGraphFeatureRepository)
   def providesRealGraphFeatureRepository(
-    @Named(ManhattanAthenaClient) client: mh.ManhattanCoordinator.MethodPerEndpoint
+    @Named(ManhattanApolloClient) client: mh.ManhattanCoordinator.MethodPerEndpoint
   ): Repository[Long, Option[uss_scala.UserSession]] = {
     val valueTransformer = CompactScalaCodec(uss_scala.UserSession).toByteBufferTransformer().flip
 
@@ -228,7 +227,7 @@ object ManhattanFeatureRepositoryModule extends TwitterModule {
         keyTransformer = LongKeyTransformer,
         valueTransformer = valueTransformer,
         appId = "real_graph",
-        dataset = "split_real_graph_features",
+        dataset = "real_graph_user_features",
         timeoutInMillis = 100,
       )
     )
@@ -261,14 +260,10 @@ object ManhattanFeatureRepositoryModule extends TwitterModule {
       cacheClient = cacheClient,
       cachePrefix = "AuthorFeatureHydrator",
       ttl = 12.hours,
-      valueInjection = valueInjection)
-
-    buildInProcessCachedRepository(
-      keyValueRepository = remoteCacheRepo,
-      ttl = 15.minutes,
-      size = 8000,
       valueInjection = valueInjection
     )
+
+    remoteCacheRepo
   }
 
   @Provides
@@ -369,6 +364,23 @@ object ManhattanFeatureRepositoryModule extends TwitterModule {
       valueTransformer = FloatTensorTransformer,
       appId = "ml_features_apollo",
       dataset = "twhin_user_engagement_embedding_fsv1__v1_thrift__embedding",
+      timeoutInMillis = 100
+    )
+  }
+
+  @Provides
+  @Singleton
+  @Named(TwhinRebuildUserEngagementFeatureRepository)
+  def providesTwhinRebuildUserEngagementFeatureRepository(
+    @Named(ManhattanApolloClient) client: mh.ManhattanCoordinator.MethodPerEndpoint
+  ): KeyValueRepository[Seq[Long], Long, ml.FloatTensor] = {
+
+    batchedManhattanKeyValueRepository(
+      client = client,
+      keyTransformer = LongUserIdKeyTransformer,
+      valueTransformer = EmbeddingTransformer,
+      appId = "twhin_embeddings_apollo",
+      dataset = "twhin_refreshed_user_eng_emb",
       timeoutInMillis = 100
     )
   }

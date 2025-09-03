@@ -47,6 +47,8 @@ object ContentFeatures {
     None,
     None,
     None,
+    None,
+    None,
     None
   )
 
@@ -94,7 +96,9 @@ object ContentFeatures {
       conversationControl = ebFeatures.conversationControl,
       // media and selfThreadMetadata not carried by ThriftTweetFeatures
       media = None,
-      selfThreadMetadata = None
+      selfThreadMetadata = None,
+      hasImage = None,
+      hasVideo = None
     )
 }
 
@@ -141,4 +145,6 @@ case class ContentFeatures(
   selfThreadMetadata: Option[tp.SelfThreadMetadata],
   tokens: Option[Seq[String]],
   conversationControl: Option[tp.ConversationControl],
+  hasImage: Option[Boolean],
+  hasVideo: Option[Boolean],
 )

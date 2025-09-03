@@ -16,7 +16,7 @@ object EngagerSocialContextBuilder {
   private val DirectInjectionContentSourceRequestParamName = "dis"
   private val DirectInjectionIdRequestParamName = "diid"
   private val DirectInjectionContentSourceSocialProofUsers = "socialproofusers"
-  private val SocialProofUrl = ""
+  private val SocialProofUrl = "/2/timeline/social_proof.json"
 }
 
 case class EngagerSocialContextBuilder(
@@ -36,8 +36,8 @@ case class EngagerSocialContextBuilder(
     val realNames = candidateFeatures.getOrElse(RealNamesFeature, Map.empty[Long, String])
     val validSocialContextIdAndScreenNames = socialContextIds.flatMap { socialContextId =>
       realNames
-        .get(socialContextId).map(screenName =>
-          SocialContextIdAndScreenName(socialContextId, screenName))
+        .get(socialContextId)
+        .map(screenName => SocialContextIdAndScreenName(socialContextId, screenName))
     }
 
     validSocialContextIdAndScreenNames match {
@@ -47,28 +47,32 @@ case class EngagerSocialContextBuilder(
         Some(mkOneUserSocialContext(socialContextString, user.socialContextId))
       case Seq(firstUser, secondUser) =>
         val socialContextString =
-          stringCenter
-            .prepare(
-              twoUsersString,
-              Map("user1" -> firstUser.screenName, "user2" -> secondUser.screenName))
+          stringCenter.prepare(
+            twoUsersString,
+            Map("user1" -> firstUser.screenName, "user2" -> secondUser.screenName)
+          )
         Some(
           mkManyUserSocialContext(
             socialContextString,
             query.getRequiredUserId,
-            validSocialContextIdAndScreenNames.map(_.socialContextId)))
+            validSocialContextIdAndScreenNames.map(_.socialContextId)
+          )
+        )
 
       case firstUser +: otherUsers =>
         val otherUsersCount = otherUsers.size
         val socialContextString =
-          stringCenter
-            .prepare(
-              moreUsersString,
-              Map("user" -> firstUser.screenName, "count" -> otherUsersCount))
+          stringCenter.prepare(
+            moreUsersString,
+            Map("user" -> firstUser.screenName, "count" -> otherUsersCount)
+          )
         Some(
           mkManyUserSocialContext(
             socialContextString,
             query.getRequiredUserId,
-            validSocialContextIdAndScreenNames.map(_.socialContextId)))
+            validSocialContextIdAndScreenNames.map(_.socialContextId)
+          )
+        )
       case _ => None
     }
   }

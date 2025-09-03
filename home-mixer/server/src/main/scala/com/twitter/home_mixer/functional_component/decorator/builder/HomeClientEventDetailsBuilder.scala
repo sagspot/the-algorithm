@@ -4,10 +4,10 @@ import com.twitter.bijection.Base64String
 import com.twitter.bijection.scrooge.BinaryScalaCodec
 import com.twitter.bijection.{Injection => Serializer}
 import com.twitter.finagle.tracing.Trace
-import com.twitter.home_mixer.model.HomeFeatures.CandidateSourceIdFeature
 import com.twitter.home_mixer.model.HomeFeatures.PositionFeature
-import com.twitter.home_mixer.model.HomeFeatures.SuggestTypeFeature
-import com.twitter.joinkey.context.RequestJoinKeyContext
+import com.twitter.home_mixer.model.HomeFeatures.PredictionRequestIdFeature
+import com.twitter.home_mixer.model.HomeFeatures.ServedIdFeature
+import com.twitter.home_mixer.model.HomeFeatures.ServedTypeFeature
 import com.twitter.product_mixer.core.feature.featuremap.FeatureMap
 import com.twitter.product_mixer.core.functional_component.decorator.urt.builder.metadata.BaseClientEventDetailsBuilder
 import com.twitter.product_mixer.core.model.common.UniversalNoun
@@ -29,11 +29,16 @@ object HomeClientEventDetailsBuilder {
     Serializer.connect[ControllerData, Array[Byte], Base64String, String]
 
   /**
+   * RequestJoinId field in HomeTweetsControllerData is repurposed to pass PredictionRequestId
+   * ReqeustJoinId is no longer used. If wish to switch back, uncomment the below method and
+   * update homeTweetsControllerDataV1.requestJoinId
+   *
    * define getRequestJoinId as a method(def) rather than a val because each new request
    * needs to call the context to update the id.
-   */
-  private def getRequestJoinId(): Option[Long] =
-    RequestJoinKeyContext.current.flatMap(_.requestJoinId)
+
+   * private def getRequestJoinId(): Option[Long] =
+   *  RequestJoinKeyContext.current.flatMap(_.requestJoinId)
+   **/
 }
 
 case class HomeClientEventDetailsBuilder[-Query <: PipelineQuery, -Candidate <: UniversalNoun[Any]](
@@ -58,17 +63,16 @@ case class HomeClientEventDetailsBuilder[-Query <: PipelineQuery, -Candidate <: 
       HomeTweetTypePredicates.PredicateMap,
       candidateFeatures)
 
-    val candidateSourceId =
-      candidateFeatures.getOrElse(CandidateSourceIdFeature, None).map(_.value.toByte)
-
     val homeTweetsControllerDataV1 = v1ht.HomeTweetsControllerData(
       tweetTypesBitmap = tweetTypesBitmaps.getOrElse(0, 0L),
       tweetTypesBitmapContinued1 = tweetTypesBitmaps.get(1),
-      candidateTweetSourceId = candidateSourceId,
       traceId = Some(Trace.id.traceId.toLong),
       injectedPosition = candidateFeatures.getOrElse(PositionFeature, None),
       tweetTypesListBytes = Some(tweetTypesListBytes),
-      requestJoinId = getRequestJoinId(),
+      // Repurpose requestJoinId field to avoid adding additional payload
+      // Use RequestJoinId to pass PredictionRequestId for model training data join
+      requestJoinId = candidateFeatures.getOrElse(PredictionRequestIdFeature, None),
+      servedId = candidateFeatures.getOrElse(ServedIdFeature, None)
     )
 
     val serializedControllerData = ControllerDataSerializer(
@@ -79,12 +83,13 @@ case class HomeClientEventDetailsBuilder[-Query <: PipelineQuery, -Candidate <: 
       conversationDetails = None,
       timelinesDetails = Some(
         TimelinesDetails(
-          injectionType = candidateFeatures.getOrElse(SuggestTypeFeature, None).map(_.name),
+          injectionType = Some(candidateFeatures.get(ServedTypeFeature).name),
           controllerData = Some(serializedControllerData),
           sourceData = None)),
       articleDetails = None,
       liveEventDetails = None,
-      commerceDetails = None
+      commerceDetails = None,
+      aiTrendDetails = None
     )
 
     Some(clientEventDetails)

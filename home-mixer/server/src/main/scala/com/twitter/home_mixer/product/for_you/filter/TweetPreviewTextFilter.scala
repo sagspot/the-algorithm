@@ -1,5 +1,6 @@
 package com.twitter.home_mixer.product.for_you.filter
 
+import com.twitter.home_mixer.model.HomeFeatures.ArticlePreviewTextFeature
 import com.twitter.home_mixer.model.HomeFeatures.TweetTextFeature
 import com.twitter.product_mixer.component_library.model.candidate.TweetCandidate
 import com.twitter.product_mixer.core.functional_component.filter.Filter
@@ -26,7 +27,9 @@ object TweetPreviewTextFilter extends Filter[PipelineQuery, TweetCandidate] {
 
     val (kept, removed) = candidates
       .partition { candidate =>
-        val text = candidate.features.get(TweetTextFeature).getOrElse("")
+        val text = candidate.features
+          .get(TweetTextFeature).orElse(
+            candidate.features.getOrElse(ArticlePreviewTextFeature, None)).getOrElse("")
 
         text.length > MinTweetLength &&
         text.take(PreviewTextLength).count(_ == '\n') <= MaxNewlines &&

@@ -1,42 +1,48 @@
 package com.twitter.home_mixer.product.scored_tweets.scoring_pipeline
 
 import com.twitter.home_mixer.functional_component.feature_hydrator._
+import com.twitter.home_mixer.functional_component.feature_hydrator.offline_aggregates.TopicEdgeAggregateFeatureHydrator
+import com.twitter.home_mixer.functional_component.feature_hydrator.offline_aggregates.TopicEdgeTruncatedAggregateFeatureHydrator
+import com.twitter.home_mixer.functional_component.feature_hydrator.offline_aggregates.TweetContentEdgeAggregateFeatureHydrator
+import com.twitter.home_mixer.functional_component.feature_hydrator.offline_aggregates.UserEngagerEdgeAggregateFeatureHydrator
+import com.twitter.home_mixer.functional_component.feature_hydrator.offline_aggregates.UserEntityAggregateFeatureHydrator
+import com.twitter.home_mixer.functional_component.feature_hydrator.MediaClusterIdFeatureHydrator
+import com.twitter.home_mixer.functional_component.feature_hydrator.real_time_aggregates._
+import com.twitter.home_mixer.functional_component.scorer.NaviModelScorer
+import com.twitter.home_mixer.functional_component.scorer.PhoenixScorer
 import com.twitter.home_mixer.model.HomeFeatures.EarlybirdScoreFeature
+import com.twitter.home_mixer.param.HomeGlobalParams.EnablePhoenixScorerParam
+import com.twitter.home_mixer.param.HomeGlobalParams.FeatureHydration.EnableGeoduckAuthorLocationHydatorParam
+import com.twitter.home_mixer.param.HomeGlobalParams.FeatureHydration.EnableSimclustersSparseTweetFeaturesParam
+import com.twitter.home_mixer.param.HomeGlobalParams.FeatureHydration.EnableTransformerPostEmbeddingJointBlueFeaturesParam
+import com.twitter.home_mixer.param.HomeGlobalParams.FeatureHydration.EnableTweetLanguageFeaturesParam
+import com.twitter.home_mixer.param.HomeGlobalParams.FeatureHydration.EnableTwhinRebuildTweetFeaturesOnlineParam
+import com.twitter.home_mixer.param.HomeGlobalParams.FeatureHydration.EnableTwhinTweetFeaturesOnlineParam
+import com.twitter.home_mixer.param.HomeGlobalParams.FeatureHydration.EnableViewCountFeaturesParam
 import com.twitter.home_mixer.product.scored_tweets.candidate_pipeline.CachedScoredTweetsCandidatePipelineConfig
 import com.twitter.home_mixer.product.scored_tweets.candidate_pipeline.ScoredTweetsBackfillCandidatePipelineConfig
-import com.twitter.home_mixer.product.scored_tweets.candidate_pipeline.ScoredTweetsFrsCandidatePipelineConfig
-import com.twitter.home_mixer.product.scored_tweets.candidate_pipeline.ScoredTweetsInNetworkCandidatePipelineConfig
+import com.twitter.home_mixer.product.scored_tweets.candidate_pipeline.ScoredTweetsDirectUtegCandidatePipelineConfig
 import com.twitter.home_mixer.product.scored_tweets.candidate_pipeline.ScoredTweetsListsCandidatePipelineConfig
-import com.twitter.home_mixer.product.scored_tweets.candidate_pipeline.ScoredTweetsPopularVideosCandidatePipelineConfig
+import com.twitter.home_mixer.product.scored_tweets.candidate_pipeline.ScoredTweetsStaticCandidatePipelineConfig
 import com.twitter.home_mixer.product.scored_tweets.candidate_pipeline.ScoredTweetsTweetMixerCandidatePipelineConfig
-import com.twitter.home_mixer.product.scored_tweets.candidate_pipeline.ScoredTweetsUtegCandidatePipelineConfig
-import com.twitter.home_mixer.product.scored_tweets.feature_hydrator.AncestorFeatureHydrator
-import com.twitter.home_mixer.product.scored_tweets.feature_hydrator.AuthorFeatureHydrator
-import com.twitter.home_mixer.product.scored_tweets.feature_hydrator.AuthorIsCreatorFeatureHydrator
+import com.twitter.home_mixer.product.scored_tweets.candidate_pipeline.earlybird.ScoredTweetsCommunitiesCandidatePipelineConfig
+import com.twitter.home_mixer.product.scored_tweets.candidate_pipeline.earlybird.ScoredTweetsEarlybirdInNetworkCandidatePipelineConfig
 import com.twitter.home_mixer.product.scored_tweets.feature_hydrator.EarlybirdFeatureHydrator
-import com.twitter.home_mixer.product.scored_tweets.feature_hydrator.GizmoduckAuthorFeatureHydrator
-import com.twitter.home_mixer.product.scored_tweets.feature_hydrator.GraphTwoHopFeatureHydrator
-import com.twitter.home_mixer.product.scored_tweets.feature_hydrator.MetricCenterUserCountingFeatureHydrator
-import com.twitter.home_mixer.product.scored_tweets.feature_hydrator.RealGraphViewerAuthorFeatureHydrator
-import com.twitter.home_mixer.product.scored_tweets.feature_hydrator.RealGraphViewerRelatedUsersFeatureHydrator
-import com.twitter.home_mixer.product.scored_tweets.feature_hydrator.RealTimeInteractionGraphEdgeFeatureHydrator
-import com.twitter.home_mixer.product.scored_tweets.feature_hydrator.SimClustersEngagementSimilarityFeatureHydrator
-import com.twitter.home_mixer.product.scored_tweets.feature_hydrator.SimClustersUserTweetScoresHydrator
-import com.twitter.home_mixer.product.scored_tweets.feature_hydrator.TSPInferredTopicFeatureHydrator
-import com.twitter.home_mixer.product.scored_tweets.feature_hydrator.TweetMetaDataFeatureHydrator
-import com.twitter.home_mixer.product.scored_tweets.feature_hydrator.TweetTimeFeatureHydrator
-import com.twitter.home_mixer.product.scored_tweets.feature_hydrator.TweetypieContentFeatureHydrator
-import com.twitter.home_mixer.product.scored_tweets.feature_hydrator.TwhinAuthorFollowFeatureHydrator
-import com.twitter.home_mixer.product.scored_tweets.feature_hydrator.UtegFeatureHydrator
-import com.twitter.home_mixer.product.scored_tweets.feature_hydrator.offline_aggregates.Phase1EdgeAggregateFeatureHydrator
-import com.twitter.home_mixer.product.scored_tweets.feature_hydrator.offline_aggregates.Phase2EdgeAggregateFeatureHydrator
-import com.twitter.home_mixer.product.scored_tweets.feature_hydrator.real_time_aggregates._
+import com.twitter.home_mixer.product.scored_tweets.feature_hydrator.ReplyFeatureHydrator
+import com.twitter.home_mixer.product.scored_tweets.feature_hydrator.SemanticCoreFeatureHydrator
+import com.twitter.home_mixer.product.scored_tweets.gate.DenyLowSignalUserGate
 import com.twitter.home_mixer.product.scored_tweets.model.ScoredTweetsQuery
+import com.twitter.home_mixer.product.scored_tweets.param.ScoredTweetsParam.FeatureHydration.EnableClipImagesClusterIdFeatureHydrationParam
+import com.twitter.home_mixer.product.scored_tweets.param.ScoredTweetsParam.FeatureHydration.EnableMediaCompletionRateFeatureHydrationParam
+import com.twitter.home_mixer.product.scored_tweets.param.ScoredTweetsParam.FeatureHydration.EnableMultiModalEmbeddingsFeatureHydratorParam
+import com.twitter.home_mixer.product.scored_tweets.param.ScoredTweetsParam.FeatureHydration.EnableTweetTextV8EmbeddingFeatureParam
 import com.twitter.home_mixer.product.scored_tweets.param.ScoredTweetsParam.QualityFactor
-import com.twitter.home_mixer.product.scored_tweets.scorer.NaviModelScorer
 import com.twitter.home_mixer.util.CandidatesUtil
+import com.twitter.product_mixer.component_library.feature_hydrator.candidate.embedding.TweetTextV8EmbeddingFeatureHydrator
+import com.twitter.product_mixer.component_library.feature_hydrator.candidate.param_gated.ParamGatedBulkCandidateFeatureHydrator
 import com.twitter.product_mixer.component_library.gate.NonEmptyCandidatesGate
 import com.twitter.product_mixer.component_library.model.candidate.TweetCandidate
+import com.twitter.product_mixer.component_library.scorer.param_gated.ParamGatedScorer
 import com.twitter.product_mixer.component_library.selector.DropMaxCandidates
 import com.twitter.product_mixer.component_library.selector.InsertAppendResults
 import com.twitter.product_mixer.component_library.selector.UpdateSortCandidates
@@ -55,69 +61,91 @@ import com.twitter.product_mixer.core.pipeline.pipeline_failure.PipelineFailure
 import com.twitter.product_mixer.core.pipeline.pipeline_failure.UnexpectedCandidateResult
 import com.twitter.product_mixer.core.pipeline.scoring.ScoringPipelineConfig
 import com.twitter.timelines.configapi.Param
-
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
 class ScoredTweetsModelScoringPipelineConfig @Inject() (
-  // candidate sources
-  scoredTweetsInNetworkCandidatePipelineConfig: ScoredTweetsInNetworkCandidatePipelineConfig,
-  scoredTweetsUtegCandidatePipelineConfig: ScoredTweetsUtegCandidatePipelineConfig,
+  // Candidate sources
   scoredTweetsTweetMixerCandidatePipelineConfig: ScoredTweetsTweetMixerCandidatePipelineConfig,
-  scoredTweetsFrsCandidatePipelineConfig: ScoredTweetsFrsCandidatePipelineConfig,
   scoredTweetsListsCandidatePipelineConfig: ScoredTweetsListsCandidatePipelineConfig,
-  scoredTweetsPopularVideosCandidatePipelineConfig: ScoredTweetsPopularVideosCandidatePipelineConfig,
   scoredTweetsBackfillCandidatePipelineConfig: ScoredTweetsBackfillCandidatePipelineConfig,
-  // feature hydrators
+  scoredTweetsEarlybirdInNetworkCandidatePipelineConfig: ScoredTweetsEarlybirdInNetworkCandidatePipelineConfig,
+  scoredTweetsCommunitiesCandidatePipelineConfig: ScoredTweetsCommunitiesCandidatePipelineConfig,
+  scoredTweetsDirectUtegCandidatePipelineConfig: ScoredTweetsDirectUtegCandidatePipelineConfig,
+  // Feature hydrators
   ancestorFeatureHydrator: AncestorFeatureHydrator,
   authorFeatureHydrator: AuthorFeatureHydrator,
-  authorIsCreatorFeatureHydrator: AuthorIsCreatorFeatureHydrator,
+  broadcastStateFeatureHydrator: BroadcastStateFeatureHydrator,
   earlybirdFeatureHydrator: EarlybirdFeatureHydrator,
-  gizmoduckAuthorSafetyFeatureHydrator: GizmoduckAuthorFeatureHydrator,
+  gizmoduckAuthorFeatureHydrator: GizmoduckAuthorFeatureHydrator,
+  geoduckAuthorLocationHydrator: GeoduckAuthorLocationHydrator,
   graphTwoHopFeatureHydrator: GraphTwoHopFeatureHydrator,
-  metricCenterUserCountingFeatureHydrator: MetricCenterUserCountingFeatureHydrator,
-  perspectiveFilteredSocialContextFeatureHydrator: PerspectiveFilteredSocialContextFeatureHydrator,
+  mediaClusterIdFeatureHydrator: MediaClusterIdFeatureHydrator,
+  mediaCompletionRateFeatureHydrator: MediaCompletionRateFeatureHydrator,
+  clipImagesClusterIdFeatureHydrator: ClipImageClusterIdFeatureHydrator,
+  viralContentCreatorMetricsFeatureHydrator: ViralContentCreatorMetricsFeatureHydrator,
+  multiModalEmbeddingsFeatureHydrator: MultiModalEmbeddingsFeatureHydrator,
   realGraphViewerAuthorFeatureHydrator: RealGraphViewerAuthorFeatureHydrator,
   realGraphViewerRelatedUsersFeatureHydrator: RealGraphViewerRelatedUsersFeatureHydrator,
   realTimeInteractionGraphEdgeFeatureHydrator: RealTimeInteractionGraphEdgeFeatureHydrator,
+  replyFeatureHydrator: ReplyFeatureHydrator,
   sgsValidSocialContextFeatureHydrator: SGSValidSocialContextFeatureHydrator,
   simClustersEngagementSimilarityFeatureHydrator: SimClustersEngagementSimilarityFeatureHydrator,
   simClustersUserTweetScoresHydrator: SimClustersUserTweetScoresHydrator,
+  spaceStateFeatureHydrator: SpaceStateFeatureHydrator,
   tspInferredTopicFeatureHydrator: TSPInferredTopicFeatureHydrator,
-  tweetypieContentFeatureHydrator: TweetypieContentFeatureHydrator,
+  tweetEntityServiceContentFeatureHydrator: TweetEntityServiceContentFeatureHydrator,
+  tweetTextV8EmbeddingFeatureHydrator: TweetTextV8EmbeddingFeatureHydrator,
   twhinAuthorFollowFeatureHydrator: TwhinAuthorFollowFeatureHydrator,
+  twhinTweetFeatureHydrator: TwhinTweetFeatureHydrator,
+  twhinRebuildTweetFeatureHydrator: TwhinRebuildTweetFeatureHydrator,
   utegFeatureHydrator: UtegFeatureHydrator,
-  // real time aggregate feature hydrators
+  slopAuthorFeatureHydrator: SlopAuthorFeatureHydrator,
+  grokAnnotationsFeatureHydrator: GrokAnnotationsFeatureHydrator,
+  // Real time aggregate feature hydrators
   engagementsReceivedByAuthorRealTimeAggregateFeatureHydrator: EngagementsReceivedByAuthorRealTimeAggregateFeatureHydrator,
   topicCountryEngagementRealTimeAggregateFeatureHydrator: TopicCountryEngagementRealTimeAggregateFeatureHydrator,
   topicEngagementRealTimeAggregateFeatureHydrator: TopicEngagementRealTimeAggregateFeatureHydrator,
   tweetCountryEngagementRealTimeAggregateFeatureHydrator: TweetCountryEngagementRealTimeAggregateFeatureHydrator,
   tweetEngagementRealTimeAggregateFeatureHydrator: TweetEngagementRealTimeAggregateFeatureHydrator,
+  tweetLanguageFeatureHydrator: TweetLanguageFeatureHydrator,
   twitterListEngagementRealTimeAggregateFeatureHydrator: TwitterListEngagementRealTimeAggregateFeatureHydrator,
   userAuthorEngagementRealTimeAggregateFeatureHydrator: UserAuthorEngagementRealTimeAggregateFeatureHydrator,
-  // offline aggregate feature hydrators
-  phase1EdgeAggregateFeatureHydrator: Phase1EdgeAggregateFeatureHydrator,
-  phase2EdgeAggregateFeatureHydrator: Phase2EdgeAggregateFeatureHydrator,
-  // model
-  naviModelScorer: NaviModelScorer)
+  viewCountsFeatureHydrator: ViewCountsFeatureHydrator,
+  // Large embeddings hydrators
+  authorLargeEmbeddingsFeatureHydrator: AuthorLargeEmbeddingsFeatureHydrator,
+  originalAuthorLargeEmbeddingsFeatureHydrator: OriginalAuthorLargeEmbeddingsFeatureHydrator,
+  tweetLargeEmbeddingsFeatureHydrator: TweetLargeEmbeddingsFeatureHydrator,
+  originalTweetLargeEmbeddingsFeatureHydrator: OriginalTweetLargeEmbeddingsFeatureHydrator,
+  // Transformer embeddings hydrators
+  transformerPostEmbeddingBlueFeatureHydrator: TransformerPostEmbeddingHomeBlueFeatureHydrator,
+  transformerPostEmbeddingGreenFeatureHydrator: TransformerPostEmbeddingHomeGreenFeatureHydrator,
+  transformerPostEmbeddingJointBlueFeatureHydrator: TransformerPostEmbeddingJointBlueFeatureHydrator,
+  simClustersLogFavBasedTweetFeatureHydrator: SimClustersLogFavBasedTweetFeatureHydrator,
+  // Scorers
+  naviModelScorer: NaviModelScorer,
+  phoenixScorer: PhoenixScorer)
     extends ScoringPipelineConfig[ScoredTweetsQuery, TweetCandidate] {
 
   override val identifier: ScoringPipelineIdentifier =
     ScoringPipelineIdentifier("ScoredTweetsModel")
 
   private val nonCachedScoringPipelineScope = AllExceptPipelines(
-    pipelinesToExclude = Set(CachedScoredTweetsCandidatePipelineConfig.Identifier)
+    pipelinesToExclude = Set(
+      CachedScoredTweetsCandidatePipelineConfig.Identifier,
+      ScoredTweetsStaticCandidatePipelineConfig.Identifier
+    )
   )
 
   override val gates: Seq[BaseGate[ScoredTweetsQuery]] = Seq(
+    DenyLowSignalUserGate,
     NonEmptyCandidatesGate(nonCachedScoringPipelineScope)
   )
 
   private val earlybirdScorePipelineScope = Set(
-    scoredTweetsInNetworkCandidatePipelineConfig.identifier,
-    scoredTweetsUtegCandidatePipelineConfig.identifier,
-    scoredTweetsFrsCandidatePipelineConfig.identifier
+    scoredTweetsEarlybirdInNetworkCandidatePipelineConfig.identifier,
+    scoredTweetsDirectUtegCandidatePipelineConfig.identifier
   )
 
   private val earlybirdScoreOrdering: Ordering[CandidateWithDetails] =
@@ -134,8 +162,7 @@ class ScoredTweetsModelScoringPipelineConfig @Inject() (
     new DropMaxCandidates(
       pipelineScope = SpecificPipelines(pipelineIdentifier),
       maxSelector = (query, _, _) =>
-        (query.getQualityFactorCurrentValue(identifier) *
-          query.params(qualityFactorParam)).toInt
+        (query.getQualityFactorCurrentValue(identifier) * query.params(qualityFactorParam)).toInt
     )
   }
 
@@ -146,18 +173,6 @@ class ScoredTweetsModelScoringPipelineConfig @Inject() (
       CandidatesUtil.reverseChronTweetsOrdering
     ),
     qualityFactorDropMaxCandidates(
-      scoredTweetsInNetworkCandidatePipelineConfig.identifier,
-      QualityFactor.InNetworkMaxTweetsToScoreParam
-    ),
-    qualityFactorDropMaxCandidates(
-      scoredTweetsUtegCandidatePipelineConfig.identifier,
-      QualityFactor.UtegMaxTweetsToScoreParam
-    ),
-    qualityFactorDropMaxCandidates(
-      scoredTweetsFrsCandidatePipelineConfig.identifier,
-      QualityFactor.FrsMaxTweetsToScoreParam
-    ),
-    qualityFactorDropMaxCandidates(
       scoredTweetsTweetMixerCandidatePipelineConfig.identifier,
       QualityFactor.TweetMixerMaxTweetsToScoreParam
     ),
@@ -166,12 +181,20 @@ class ScoredTweetsModelScoringPipelineConfig @Inject() (
       QualityFactor.ListsMaxTweetsToScoreParam
     ),
     qualityFactorDropMaxCandidates(
-      scoredTweetsPopularVideosCandidatePipelineConfig.identifier,
-      QualityFactor.PopularVideosMaxTweetsToScoreParam
-    ),
-    qualityFactorDropMaxCandidates(
       scoredTweetsBackfillCandidatePipelineConfig.identifier,
       QualityFactor.BackfillMaxTweetsToScoreParam
+    ),
+    qualityFactorDropMaxCandidates(
+      scoredTweetsEarlybirdInNetworkCandidatePipelineConfig.identifier,
+      QualityFactor.InNetworkMaxTweetsToScoreParam
+    ),
+    qualityFactorDropMaxCandidates(
+      scoredTweetsCommunitiesCandidatePipelineConfig.identifier,
+      QualityFactor.CommunitiesMaxTweetsToScoreParam
+    ),
+    qualityFactorDropMaxCandidates(
+      scoredTweetsDirectUtegCandidatePipelineConfig.identifier,
+      QualityFactor.UtegMaxTweetsToScoreParam
     ),
     // Select candidates for Heavy Ranker Feature Hydration and Scoring
     InsertAppendResults(nonCachedScoringPipelineScope)
@@ -180,44 +203,111 @@ class ScoredTweetsModelScoringPipelineConfig @Inject() (
   override val preScoringFeatureHydrationPhase1: Seq[
     BaseCandidateFeatureHydrator[ScoredTweetsQuery, TweetCandidate, _]
   ] = Seq(
-    TweetMetaDataFeatureHydrator,
-    ancestorFeatureHydrator,
+    DependentBulkCandidateFeatureHydrator(ancestorFeatureHydrator, Seq(replyFeatureHydrator)),
     authorFeatureHydrator,
-    authorIsCreatorFeatureHydrator,
-    earlybirdFeatureHydrator,
-    gizmoduckAuthorSafetyFeatureHydrator,
+    DependentBulkCandidateFeatureHydrator(
+      earlybirdFeatureHydrator,
+      Seq(spaceStateFeatureHydrator, broadcastStateFeatureHydrator, TweetTimeFeatureHydrator)),
+    gizmoduckAuthorFeatureHydrator,
+    ParamGatedBulkCandidateFeatureHydrator(
+      EnableGeoduckAuthorLocationHydatorParam,
+      geoduckAuthorLocationHydrator,
+    ),
     graphTwoHopFeatureHydrator,
-    metricCenterUserCountingFeatureHydrator,
-    realTimeInteractionGraphEdgeFeatureHydrator,
+    InNetworkFeatureHydrator,
     realGraphViewerAuthorFeatureHydrator,
+    realTimeInteractionGraphEdgeFeatureHydrator,
     simClustersEngagementSimilarityFeatureHydrator,
     simClustersUserTweetScoresHydrator,
-    InNetworkFeatureHydrator,
-    tspInferredTopicFeatureHydrator,
-    tweetypieContentFeatureHydrator,
+    DependentBulkCandidateFeatureHydrator(
+      tspInferredTopicFeatureHydrator,
+      Seq(
+        TopicEdgeAggregateFeatureHydrator,
+        TopicEdgeTruncatedAggregateFeatureHydrator,
+        topicCountryEngagementRealTimeAggregateFeatureHydrator,
+        topicEngagementRealTimeAggregateFeatureHydrator
+      )
+    ),
+    TweetMetaDataFeatureHydrator,
+    ParamGatedBulkCandidateFeatureHydrator(
+      EnableTweetTextV8EmbeddingFeatureParam,
+      tweetTextV8EmbeddingFeatureHydrator
+    ),
+    DependentBulkCandidateFeatureHydrator(
+      tweetEntityServiceContentFeatureHydrator,
+      Seq(
+        SemanticCoreFeatureHydrator,
+        TweetContentEdgeAggregateFeatureHydrator,
+        mediaClusterIdFeatureHydrator)),
     twhinAuthorFollowFeatureHydrator,
-    utegFeatureHydrator,
-    // real time aggregates
+    ParamGatedBulkCandidateFeatureHydrator(
+      EnableTwhinTweetFeaturesOnlineParam,
+      twhinTweetFeatureHydrator
+    ),
+    ParamGatedBulkCandidateFeatureHydrator(
+      EnableTwhinRebuildTweetFeaturesOnlineParam,
+      twhinRebuildTweetFeatureHydrator
+    ),
+    ParamGatedBulkCandidateFeatureHydrator(
+      EnableViewCountFeaturesParam,
+      viewCountsFeatureHydrator
+    ),
+    DependentBulkCandidateFeatureHydrator(
+      utegFeatureHydrator,
+      Seq(
+        realGraphViewerRelatedUsersFeatureHydrator,
+        sgsValidSocialContextFeatureHydrator,
+        UserEngagerEdgeAggregateFeatureHydrator
+      )
+    ),
+    slopAuthorFeatureHydrator,
+    // Real time aggregates
     engagementsReceivedByAuthorRealTimeAggregateFeatureHydrator,
     tweetCountryEngagementRealTimeAggregateFeatureHydrator,
     tweetEngagementRealTimeAggregateFeatureHydrator,
+    ParamGatedBulkCandidateFeatureHydrator(
+      EnableTweetLanguageFeaturesParam,
+      tweetLanguageFeatureHydrator
+    ),
     twitterListEngagementRealTimeAggregateFeatureHydrator,
     userAuthorEngagementRealTimeAggregateFeatureHydrator,
-    // offline aggregates
-    phase1EdgeAggregateFeatureHydrator
+    // Offline aggregates
+    UserEntityAggregateFeatureHydrator,
+    viralContentCreatorMetricsFeatureHydrator,
+    GrokGorkContentCreatorFeatureHydrator,
+    // Large Embeddings
+    authorLargeEmbeddingsFeatureHydrator,
+    originalAuthorLargeEmbeddingsFeatureHydrator,
+    tweetLargeEmbeddingsFeatureHydrator,
+    originalTweetLargeEmbeddingsFeatureHydrator,
+    // Transformers
+    transformerPostEmbeddingBlueFeatureHydrator,
+    transformerPostEmbeddingGreenFeatureHydrator,
+    ParamGatedBulkCandidateFeatureHydrator(
+      EnableTransformerPostEmbeddingJointBlueFeaturesParam,
+      transformerPostEmbeddingJointBlueFeatureHydrator
+    ),
+    ParamGatedBulkCandidateFeatureHydrator(
+      EnableSimclustersSparseTweetFeaturesParam,
+      simClustersLogFavBasedTweetFeatureHydrator
+    ),
+    grokAnnotationsFeatureHydrator,
+    ParamGatedBulkCandidateFeatureHydrator(
+      EnableMediaCompletionRateFeatureHydrationParam,
+      mediaCompletionRateFeatureHydrator,
+    ),
+    ParamGatedBulkCandidateFeatureHydrator(
+      EnableClipImagesClusterIdFeatureHydrationParam,
+      clipImagesClusterIdFeatureHydrator
+    ),
+    ParamGatedBulkCandidateFeatureHydrator(
+      EnableMultiModalEmbeddingsFeatureHydratorParam,
+      multiModalEmbeddingsFeatureHydrator
+    )
   )
 
-  override val preScoringFeatureHydrationPhase2: Seq[
-    BaseCandidateFeatureHydrator[ScoredTweetsQuery, TweetCandidate, _]
-  ] = Seq(
-    perspectiveFilteredSocialContextFeatureHydrator,
-    phase2EdgeAggregateFeatureHydrator,
-    realGraphViewerRelatedUsersFeatureHydrator,
-    sgsValidSocialContextFeatureHydrator,
-    TweetTimeFeatureHydrator,
-    topicCountryEngagementRealTimeAggregateFeatureHydrator,
-    topicEngagementRealTimeAggregateFeatureHydrator
+  override val scorers: Seq[Scorer[ScoredTweetsQuery, TweetCandidate]] = Seq(
+    naviModelScorer,
+    ParamGatedScorer(EnablePhoenixScorerParam, phoenixScorer)
   )
-
-  override val scorers: Seq[Scorer[ScoredTweetsQuery, TweetCandidate]] = Seq(naviModelScorer)
 }

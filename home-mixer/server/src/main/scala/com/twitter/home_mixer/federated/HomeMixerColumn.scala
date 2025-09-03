@@ -1,9 +1,17 @@
 package com.twitter.home_mixer.federated
 
+import com.twitter.conversions.DurationOps._
+import com.twitter.finagle.filter.SLODefinition
+import com.twitter.finagle.filter.SLOStatsFilter
+import com.twitter.finagle.service.ResponseClassifier
+import com.twitter.finagle.stats.DefaultStatsReceiver
 import com.twitter.gizmoduck.{thriftscala => gd}
 import com.twitter.home_mixer.marshaller.request.HomeMixerRequestUnmarshaller
 import com.twitter.home_mixer.model.request.HomeMixerRequest
 import com.twitter.home_mixer.{thriftscala => hm}
+import com.twitter.joinkey.context.thriftscala.{RequestJoinKeyContext => ThriftJoinKeyContext}
+import com.twitter.joinkey.context.RequestJoinKeyContext
+import com.twitter.joinkey.context.ThreadedLocalJoinKeyRandomGenerator
 import com.twitter.product_mixer.core.functional_component.configapi.ParamsBuilder
 import com.twitter.product_mixer.core.pipeline.product.ProductPipelineRequest
 import com.twitter.product_mixer.core.pipeline.product.ProductPipelineResult
@@ -11,15 +19,17 @@ import com.twitter.product_mixer.core.product.registry.ProductPipelineRegistry
 import com.twitter.product_mixer.core.{thriftscala => pm}
 import com.twitter.stitch.Arrow
 import com.twitter.stitch.Stitch
+import com.twitter.stitch.Stitch.Letter
+import com.twitter.stitch.gizmoduck.Gizmoduck
 import com.twitter.strato.callcontext.CallContext
 import com.twitter.strato.catalog.OpMetadata
 import com.twitter.strato.config._
 import com.twitter.strato.data._
 import com.twitter.strato.fed.StratoFed
 import com.twitter.strato.generated.client.auth_context.AuditIpClientColumn
-import com.twitter.strato.generated.client.gizmoduck.CompositeOnUserClientColumn
 import com.twitter.strato.graphql.timelines.{thriftscala => gql}
 import com.twitter.strato.thrift.ScroogeConv
+import com.twitter.timelines.render.thriftscala.Timeline
 import com.twitter.timelines.render.{thriftscala => tr}
 import com.twitter.util.Try
 import javax.inject.Inject
@@ -28,7 +38,7 @@ import javax.inject.Singleton
 @Singleton
 class HomeMixerColumn @Inject() (
   homeMixerRequestUnmarshaller: HomeMixerRequestUnmarshaller,
-  compositeOnUserClientColumn: CompositeOnUserClientColumn,
+  gizmoduck: Gizmoduck,
   auditIpClientColumn: AuditIpClientColumn,
   paramsBuilder: ParamsBuilder,
   productPipelineRegistry: ProductPipelineRegistry)
@@ -38,6 +48,7 @@ class HomeMixerColumn @Inject() (
   override val contactInfo: ContactInfo = ContactInfo(
     contactEmail = "",
     ldapGroup = "",
+    jiraProject = "",
     slackRoomId = ""
   )
 
@@ -57,6 +68,18 @@ class HomeMixerColumn @Inject() (
       zone = Seq(""))
   )
 
+  private val sloStatsFilter = {
+    val requestToSLODefinition: PartialFunction[Any, SLODefinition] = {
+      case gql.TimelineKey.HomeTimeline(_) | gql.TimelineKey.HomeTimelineV2(_) =>
+        SLODefinition("ForYou", 1000.millis)
+    }
+    new SLOStatsFilter[gql.TimelineKey, Result[Timeline]](
+      requestToSLODefinition = requestToSLODefinition,
+      responseClassifier = ResponseClassifier.Default,
+      statsReceiver = DefaultStatsReceiver.scope("slo")
+    )
+  }
+
   override val policy: Policy = AnyOf(bouncerAccess ++ finatraTestServiceIdentifiers)
 
   override type Key = gql.TimelineKey
@@ -67,25 +90,30 @@ class HomeMixerColumn @Inject() (
   override val viewConv: Conv[View] = ScroogeConv.fromStruct[gql.HomeTimelineView]
   override val valueConv: Conv[Value] = ScroogeConv.fromStruct[tr.Timeline]
 
+  // For populating requestJoinId
+  private val joinIdGenerator = new ThreadedLocalJoinKeyRandomGenerator
+  // For populating user roles
+  private val queryFieldsRoles = gd.QueryFields.Roles
+  private object RequestJoinKeyLetter extends Letter[Option[Long]] {
+    override def let[A](requestJoinId: Option[Long])(fn: => A): A =
+      RequestJoinKeyContext.let(ThriftJoinKeyContext(requestJoinId))(fn)
+  }
+
   private def createHomeMixerRequestArrow(
-    compositeOnUserClientColumn: CompositeOnUserClientColumn,
-    auditIpClientColumn: AuditIpClientColumn
+    auditIpClientColumn: AuditIpClientColumn,
   ): Arrow[(Key, View), hm.HomeMixerRequest] = {
 
     val populateUserRolesAndIp: Arrow[(Key, View), (Option[Set[String]], Option[String])] = {
-      val gizmoduckView: (gd.LookupContext, Set[gd.QueryFields]) =
-        (gd.LookupContext(), Set(gd.QueryFields.Roles))
-
       val populateUserRoles = Arrow
         .flatMap[(Key, View), Option[Set[String]]] { _ =>
           Stitch.collect {
             CallContext.twitterUserId.map { userId =>
-              compositeOnUserClientColumn.fetcher
-                .callStack(HomeMixerColumn.FetchCallstack)
-                .fetch(userId, gizmoduckView).map(_.v)
-                .map {
-                  _.flatMap(_.roles.map(_.roles.toSet)).getOrElse(Set.empty)
-                }
+              gizmoduck
+                .getUserById(
+                  userId = userId,
+                  queryFields = Set(queryFieldsRoles),
+                  context = gd.LookupContext(forUserId = Some(userId))
+                ).map(_.roles.map(_.roles.toSet).getOrElse(Set.empty))
             }
           }
         }
@@ -152,7 +180,9 @@ class HomeMixerColumn @Inject() (
           deviceId = CallContext.deviceId,
           mobileDeviceId = CallContext.mobileDeviceId,
           mobileDeviceAdId = CallContext.adId,
-          limitAdTracking = CallContext.limitAdTracking
+          limitAdTracking = CallContext.limitAdTracking,
+          authenticatedUserId = CallContext.authenticatedTwitterUserId,
+          isVerifiedCrawler = CallContext.isVerifiedCrawler
         )
 
         hm.HomeMixerRequest(
@@ -173,18 +203,16 @@ class HomeMixerColumn @Inject() (
       Arrow
         .identity[(Key, View)]
         .andThen {
-          createHomeMixerRequestArrow(compositeOnUserClientColumn, auditIpClientColumn)
+          createHomeMixerRequestArrow(auditIpClientColumn)
         }
-        .map {
-          case thriftRequest =>
-            val request = homeMixerRequestUnmarshaller(thriftRequest)
-            val params = paramsBuilder.build(
-              clientContext = request.clientContext,
-              product = request.product,
-              featureOverrides =
-                request.debugParams.flatMap(_.featureOverrides).getOrElse(Map.empty),
-            )
-            ProductPipelineRequest(request, params)
+        .map { thriftRequest =>
+          val request = homeMixerRequestUnmarshaller(thriftRequest)
+          val params = paramsBuilder.build(
+            clientContext = request.clientContext,
+            product = request.product,
+            featureOverrides = request.debugParams.flatMap(_.featureOverrides).getOrElse(Map.empty),
+          )
+          ProductPipelineRequest(request, params)
         }
     }
 
@@ -194,19 +222,33 @@ class HomeMixerColumn @Inject() (
     ] = Arrow
       .identity[ProductPipelineRequest[HomeMixerRequest]]
       .map { pipelineRequest =>
-        val pipelineArrow = productPipelineRegistry
-          .getProductPipeline[HomeMixerRequest, tr.TimelineResponse](
-            pipelineRequest.request.product)
-          .arrow
+        val pipelineArrow =
+          Arrow.let(RequestJoinKeyLetter)(joinIdGenerator.get().getNewRequestJoinId) { // Populate requestJoinId
+            productPipelineRegistry
+              .getProductPipeline[HomeMixerRequest, tr.TimelineResponse](
+                pipelineRequest.request.product)
+              .arrow
+          }
         (pipelineArrow, pipelineRequest)
       }.applyArrow
 
-    transformThriftIntoPipelineRequest.andThen(underlyingProduct).map {
-      _.result match {
-        case Some(result) => found(result.timeline)
-        case _ => missing
-      }
-    }
+    Arrow
+      .zipWithArg(
+        Arrow.time {
+          transformThriftIntoPipelineRequest
+            .andThen(underlyingProduct)
+            .map {
+              _.result match {
+                case Some(result) => found(result.timeline)
+                case _ => missing
+              }
+            }
+        }
+      ).map {
+        case ((key, _), (result, duration)) =>
+          sloStatsFilter.record(key, result, duration.inNanoseconds)
+          result
+      }.lowerFromTry
   }
 }
 

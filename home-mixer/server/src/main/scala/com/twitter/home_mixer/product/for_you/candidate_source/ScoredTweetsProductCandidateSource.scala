@@ -1,8 +1,14 @@
 package com.twitter.home_mixer.product.for_you.candidate_source
 
 import com.google.inject.Provider
+import com.twitter.home_mixer.model.HomeFeatures.ServedAuthorIdsFeature
 import com.twitter.home_mixer.model.HomeFeatures.ServedTweetIdsFeature
+import com.twitter.home_mixer.model.HomeFeatures.SignupCountryFeature
+import com.twitter.home_mixer.model.HomeFeatures.SignupSourceFeature
 import com.twitter.home_mixer.model.HomeFeatures.TimelineServiceTweetsFeature
+import com.twitter.home_mixer.model.HomeFeatures.UserFollowersCountFeature
+import com.twitter.home_mixer.model.HomeFeatures.ViewerAllowsForYouRecommendationsFeature
+import com.twitter.home_mixer.model.HomeFeatures.ViewerHasPremiumTier
 import com.twitter.home_mixer.model.request.HomeMixerRequest
 import com.twitter.home_mixer.model.request.ScoredTweetsProduct
 import com.twitter.home_mixer.model.request.ScoredTweetsProductContext
@@ -13,8 +19,9 @@ import com.twitter.product_mixer.core.functional_component.candidate_source.prod
 import com.twitter.product_mixer.core.functional_component.configapi.ParamsBuilder
 import com.twitter.product_mixer.core.model.common.identifier.CandidateSourceIdentifier
 import com.twitter.product_mixer.core.product.registry.ProductPipelineRegistry
+import com.twitter.snowflake.id.SnowflakeId
+import com.twitter.spam.rtf.{thriftscala => spam}
 import com.twitter.timelines.render.{thriftscala => tl}
-import com.twitter.timelineservice.suggests.{thriftscala => st}
 import com.twitter.tweetconvosvc.tweet_ancestor.{thriftscala => ta}
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -26,7 +33,7 @@ case class ScoredTweetWithConversationMetadata(
   tweetId: Long,
   authorId: Long,
   score: Option[Double] = None,
-  suggestType: Option[st.SuggestType] = None,
+  servedType: t.ServedType,
   sourceTweetId: Option[Long] = None,
   sourceUserId: Option[Long] = None,
   quotedTweetId: Option[Long] = None,
@@ -37,20 +44,44 @@ case class ScoredTweetWithConversationMetadata(
   inNetwork: Option[Boolean] = None,
   sgsValidLikedByUserIds: Option[Seq[Long]] = None,
   sgsValidFollowedByUserIds: Option[Seq[Long]] = None,
+  validLikedByUserIds: Option[Seq[Long]] = None,
   ancestors: Option[Seq[ta.TweetAncestor]] = None,
   topicId: Option[Long] = None,
   topicFunctionalityType: Option[tl.TopicContextFunctionalityType] = None,
   conversationId: Option[Long] = None,
   conversationFocalTweetId: Option[Long] = None,
   isReadFromCache: Option[Boolean] = None,
-  streamToKafka: Option[Boolean] = None,
   exclusiveConversationAuthorId: Option[Long] = None,
   authorIsBlueVerified: Option[Boolean] = None,
   authorIsGoldVerified: Option[Boolean] = None,
   authorIsGrayVerified: Option[Boolean] = None,
   authorIsLegacyVerified: Option[Boolean] = None,
   authorIsCreator: Option[Boolean] = None,
-  perspectiveFilteredLikedByUserIds: Option[Seq[Long]] = None)
+  authorFollowers: Option[Long] = None,
+  locationId: Option[String] = None,
+  predictionRequestId: Option[Long] = None,
+  communityId: Option[Long] = None,
+  communityName: Option[String] = None,
+  listId: Option[Long] = None,
+  listName: Option[String] = None,
+  isNsfw: Option[Boolean] = None,
+  visibilityReason: Option[spam.FilteredReason] = None,
+  tweetLanguage: Option[String] = None,
+  tweetText: Option[String] = None,
+  tweetTypeMetrics: Option[Seq[Byte]] = None,
+  debugString: Option[String] = None,
+  viralContentCreatorFeature: Option[Boolean] = None,
+  grokContentCreatorFeature: Option[Boolean] = None,
+  gorkContentCreatorFeature: Option[Boolean] = None,
+  hasVideoFeature: Option[Boolean] = None,
+  videoDurationMsFeature: Option[Int] = None,
+  mediaIds: Option[Seq[Long]] = None,
+  grokAnnotations: Option[t.GrokAnnotations] = None,
+  predictedScores: Option[t.PredictedScores] = None,
+  phoenixPredictedScores: Option[t.PredictedScores] = None,
+  sourceSignal: Option[t.SourceSignal] = None,
+  userActionsSize: Option[Int] = None,
+  userActionsContainsExplicitSignals: Option[Boolean] = None)
 
 @Singleton
 class ScoredTweetsProductCandidateSource @Inject() (
@@ -69,6 +100,18 @@ class ScoredTweetsProductCandidateSource @Inject() (
   private val MaxModuleSize = 3
   private val MaxAncestorsInConversation = 2
 
+  override def fsCustomMapInput(query: ForYouQuery): Map[String, Int] = {
+    val userAgeOpt = query.clientContext.userId.map { userId =>
+      SnowflakeId.timeFromIdOpt(userId).map(_.untilNow.inDays).getOrElse(Int.MaxValue)
+    }
+    val premium = query.features
+      .map(_.getOrElse(ViewerHasPremiumTier, false)).getOrElse(false)
+    Map(
+      "account_age_in_days" -> userAgeOpt.getOrElse(Int.MaxValue),
+      "premium" -> (if (premium) 1 else 0)
+    )
+  }
+
   override def pipelineRequestTransformer(productPipelineQuery: ForYouQuery): HomeMixerRequest = {
     HomeMixerRequest(
       clientContext = productPipelineQuery.clientContext,
@@ -78,11 +121,19 @@ class ScoredTweetsProductCandidateSource @Inject() (
           productPipelineQuery.deviceContext,
           productPipelineQuery.seenTweetIds,
           productPipelineQuery.features.map(_.getOrElse(ServedTweetIdsFeature, Seq.empty)),
-          productPipelineQuery.features.map(_.getOrElse(TimelineServiceTweetsFeature, Seq.empty))
-        )),
+          productPipelineQuery.features.map(_.getOrElse(TimelineServiceTweetsFeature, Seq.empty)),
+          productPipelineQuery.features.flatMap(_.getOrElse(SignupCountryFeature, None)),
+          productPipelineQuery.features
+            .flatMap(_.getOrElse(ViewerAllowsForYouRecommendationsFeature, None)),
+          productPipelineQuery.features.flatMap(_.getOrElse(SignupSourceFeature, None)),
+          productPipelineQuery.features.flatMap(_.getOrElse(UserFollowersCountFeature, None)),
+          productPipelineQuery.features
+            .map(_.getOrElse(ServedAuthorIdsFeature, Map.empty[Long, Seq[Long]]))
+        )
+      ),
       serializedRequestCursor =
         productPipelineQuery.pipelineCursor.map(UrtCursorSerializer.serializeCursor),
-      maxResults = productPipelineQuery.requestedMaxResults,
+      maxResults = None,
       debugParams = None,
       homeRequestParam = false
     )
@@ -100,7 +151,7 @@ class ScoredTweetsProductCandidateSource @Inject() (
         ScoredTweetWithConversationMetadata(
           tweetId = ancestor.tweetId,
           authorId = ancestor.userId,
-          suggestType = focalTweet.suggestType,
+          servedType = focalTweet.servedType,
           conversationId = Some(ancestor.tweetId),
           conversationFocalTweetId = Some(focalTweet.tweetId),
           exclusiveConversationAuthorId = focalTweet.exclusiveConversationAuthorId
@@ -116,7 +167,7 @@ class ScoredTweetsProductCandidateSource @Inject() (
         ScoredTweetWithConversationMetadata(
           tweetId = ancestor.tweetId,
           authorId = ancestor.userId,
-          suggestType = focalTweet.suggestType,
+          servedType = focalTweet.servedType,
           inReplyToTweetId = tweetsToParents.get(ancestor).map(_.tweetId),
           conversationId = conversationId,
           conversationFocalTweetId = Some(focalTweet.tweetId),
@@ -132,7 +183,7 @@ class ScoredTweetsProductCandidateSource @Inject() (
         tweetId = focalTweet.tweetId,
         authorId = focalTweet.authorId,
         score = focalTweet.score,
-        suggestType = focalTweet.suggestType,
+        servedType = focalTweet.servedType,
         sourceTweetId = focalTweet.sourceTweetId,
         sourceUserId = focalTweet.sourceUserId,
         quotedTweetId = focalTweet.quotedTweetId,
@@ -143,20 +194,44 @@ class ScoredTweetsProductCandidateSource @Inject() (
         inNetwork = focalTweet.inNetwork,
         sgsValidLikedByUserIds = focalTweet.sgsValidLikedByUserIds,
         sgsValidFollowedByUserIds = focalTweet.sgsValidFollowedByUserIds,
+        validLikedByUserIds = focalTweet.validLikedByUserIds,
         topicId = focalTweet.topicId,
         topicFunctionalityType = focalTweet.topicFunctionalityType,
         ancestors = focalTweet.ancestors,
         conversationId = conversationId,
         conversationFocalTweetId = conversationFocalTweetId,
         isReadFromCache = focalTweet.isReadFromCache,
-        streamToKafka = focalTweet.streamToKafka,
         exclusiveConversationAuthorId = focalTweet.exclusiveConversationAuthorId,
         authorIsBlueVerified = focalTweet.authorMetadata.map(_.blueVerified),
         authorIsGoldVerified = focalTweet.authorMetadata.map(_.goldVerified),
         authorIsGrayVerified = focalTweet.authorMetadata.map(_.grayVerified),
         authorIsLegacyVerified = focalTweet.authorMetadata.map(_.legacyVerified),
         authorIsCreator = focalTweet.authorMetadata.map(_.creator),
-        perspectiveFilteredLikedByUserIds = focalTweet.perspectiveFilteredLikedByUserIds
+        authorFollowers = focalTweet.authorMetadata.flatMap(_.followers),
+        locationId = focalTweet.locationId,
+        predictionRequestId = focalTweet.predictionRequestId,
+        communityId = focalTweet.communityId,
+        communityName = focalTweet.communityName,
+        listId = focalTweet.listId,
+        listName = focalTweet.listName,
+        isNsfw = focalTweet.isNsfw,
+        visibilityReason = focalTweet.visibilityReason,
+        tweetLanguage = focalTweet.tweetLanguage,
+        tweetText = focalTweet.tweetText,
+        tweetTypeMetrics = focalTweet.tweetTypeMetrics,
+        debugString = focalTweet.debugString,
+        viralContentCreatorFeature = focalTweet.viralContentCreator,
+        hasVideoFeature = focalTweet.hasVideo,
+        videoDurationMsFeature = focalTweet.videoDurationMs,
+        mediaIds = focalTweet.mediaIds,
+        grokAnnotations = focalTweet.grokAnnotations,
+        predictedScores = focalTweet.predictedScores,
+        phoenixPredictedScores = focalTweet.phoenixPredictedScores,
+        sourceSignal = focalTweet.sourceSignal,
+        userActionsSize = focalTweet.userActionsSize,
+        userActionsContainsExplicitSignals = focalTweet.userActionsContainsExplicitSignals,
+        grokContentCreatorFeature = focalTweet.grokContentCreator,
+        gorkContentCreatorFeature = focalTweet.gorkContentCreator,
       )
 
       parentScoredTweets :+ focalScoredTweet

@@ -7,7 +7,9 @@ import com.twitter.home_mixer.model.HomeFeatures.SourceUserIdFeature
 import com.twitter.home_mixer.product.following.model.HomeMixerExternalStrings
 import com.twitter.product_mixer.core.feature.featuremap.FeatureMap
 import com.twitter.product_mixer.core.model.marshalling.response.urt.icon
+import com.twitter.product_mixer.core.model.marshalling.response.urt.metadata.BottomSheet
 import com.twitter.product_mixer.core.model.marshalling.response.urt.metadata.ChildFeedbackAction
+import com.twitter.product_mixer.core.model.marshalling.response.urt.metadata.ClientEventInfo
 import com.twitter.product_mixer.core.model.marshalling.response.urt.metadata.RichBehavior
 import com.twitter.product_mixer.core.model.marshalling.response.urt.metadata.RichFeedbackBehaviorToggleMuteUser
 import com.twitter.product_mixer.core.product.guice.scope.ProductScoped
@@ -36,17 +38,29 @@ case class MuteUserChildFeedbackActionBuilder @Inject() (
           externalStrings.muteUserString,
           Map("username" -> userScreenName)
         )
+        val confirmation = stringCenter.prepare(
+          externalStrings.muteUserConfirmationString,
+          Map("username" -> userScreenName)
+        )
         ChildFeedbackAction(
           feedbackType = RichBehavior,
           prompt = Some(prompt),
-          confirmation = None,
+          confirmation = Some(confirmation),
+          subprompt = None,
           feedbackUrl = None,
           hasUndoAction = Some(true),
-          confirmationDisplayType = None,
-          clientEventInfo = None,
+          confirmationDisplayType = Some(BottomSheet),
+          clientEventInfo = Some(
+            ClientEventInfo(
+              component = None,
+              element = Some("mute"),
+              details = None,
+              action = Some("click"),
+              entityToken = None
+            )
+          ),
           icon = Some(icon.SpeakerOff),
           richBehavior = Some(RichFeedbackBehaviorToggleMuteUser(userId)),
-          subprompt = None
         )
       }
     }

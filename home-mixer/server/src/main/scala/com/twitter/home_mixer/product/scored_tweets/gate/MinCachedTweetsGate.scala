@@ -1,6 +1,8 @@
 package com.twitter.home_mixer.product.scored_tweets.gate
 
+import com.twitter.home_mixer.model.HomeFeatures.HasRecentFeedbackSinceCacheTtlFeature
 import com.twitter.home_mixer.product.scored_tweets.gate.MinCachedTweetsGate.identifierSuffix
+import com.twitter.home_mixer.product.scored_tweets.param.ScoredTweetsParam.EnableRecentFeedbackCheckParam
 import com.twitter.home_mixer.util.CachedScoredTweetsHelper
 import com.twitter.product_mixer.core.functional_component.gate.Gate
 import com.twitter.product_mixer.core.model.common.identifier.CandidatePipelineIdentifier
@@ -25,7 +27,14 @@ case class MinCachedTweetsGate(
       tweet.candidatePipelineIdentifier.exists(
         CandidatePipelineIdentifier(_).equals(candidatePipelineIdentifier))
     }
-    Stitch.value(numCachedTweets < minCachedTweets)
+
+    val hasMinCachedTweets = numCachedTweets < minCachedTweets
+    query.features.map(_.getOrElse(HasRecentFeedbackSinceCacheTtlFeature, false)) match {
+      case Some(true) =>
+        if (query.params(EnableRecentFeedbackCheckParam)) Stitch.True
+        else Stitch.value(hasMinCachedTweets)
+      case _ => Stitch.value(hasMinCachedTweets)
+    }
   }
 }
 

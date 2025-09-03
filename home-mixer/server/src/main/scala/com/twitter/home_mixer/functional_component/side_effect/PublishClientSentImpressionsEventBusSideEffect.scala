@@ -1,6 +1,9 @@
 package com.twitter.home_mixer.functional_component.side_effect
 
 import com.twitter.eventbus.client.EventBusPublisher
+import com.twitter.finagle.stats.StatsReceiver
+import com.twitter.home_mixer.model.HomeFeatures.GetNewerFeature
+import com.twitter.home_mixer.model.HomeFeatures.GetOlderFeature
 import com.twitter.home_mixer.model.request.FollowingProduct
 import com.twitter.home_mixer.model.request.ForYouProduct
 import com.twitter.home_mixer.model.request.SubscribedProduct
@@ -32,7 +35,8 @@ object PublishClientSentImpressionsEventBusSideEffect {
  */
 @Singleton
 class PublishClientSentImpressionsEventBusSideEffect @Inject() (
-  eventBusPublisher: EventBusPublisher[PublishedImpressionList])
+  eventBusPublisher: EventBusPublisher[PublishedImpressionList],
+  statsReceiver: StatsReceiver)
     extends PipelineResultSideEffect[PipelineQuery with HasSeenTweetIds, HasMarshalling]
     with PipelineResultSideEffect.Conditionally[
       PipelineQuery with HasSeenTweetIds,
@@ -42,6 +46,8 @@ class PublishClientSentImpressionsEventBusSideEffect @Inject() (
 
   override val identifier: SideEffectIdentifier =
     SideEffectIdentifier("PublishClientSentImpressionsEventBus")
+
+  private val seenIdsStatsReceiver = statsReceiver.scope(identifier.toString).scope("SeenIds")
 
   override def onlyIf(
     query: PipelineQuery with HasSeenTweetIds,
@@ -61,7 +67,17 @@ class PublishClientSentImpressionsEventBusSideEffect @Inject() (
       case SubscribedProduct => HomeSubscribedSurfaceArea
       case _ => None
     }
+
+    val device = query.clientContext.appId.getOrElse(0L).toString
+
     query.seenTweetIds.map { seenTweetIds =>
+      val getNewer = query.features.map(_.getOrElse(GetNewerFeature, false)).getOrElse(false)
+      val getOlder = query.features.map(_.getOrElse(GetOlderFeature, false)).getOrElse(false)
+      val requestType = if (getNewer) "newer" else if (getOlder) "older" else "none"
+      seenIdsStatsReceiver
+        .scope(query.product.identifier.name).scope(requestType).stat(device)
+        .add(seenTweetIds.distinct.size)
+
       seenTweetIds.map { tweetId =>
         Impression(
           tweetId = tweetId,

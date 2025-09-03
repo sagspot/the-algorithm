@@ -16,6 +16,7 @@ object EarlybirdRequestUtil {
 
   val DefaultMaxHitsToProcess = 1000
   val DefaultSearchProcessingTimeout: Duration = 200.milliseconds
+  val DefaultFeatureHydrationTimeout: Duration = 50.milliseconds
   val DefaultHydrationMaxNumResultsPerShard = 1000
   val DefaultQueryMaxNumResultsPerShard = 300
   val DefaultHydrationCollectorParams = mkCollectorParams(DefaultHydrationMaxNumResultsPerShard)
@@ -77,7 +78,7 @@ object EarlybirdRequestUtil {
     userId: Option[Long],
     clientId: Option[String],
     skipVeryRecentTweets: Boolean,
-    followedUserIds: Set[Long],
+    queryUserIds: Set[Long],
     retweetsMutedUserIds: Set[Long],
     beforeTweetIdExclusive: Option[Long],
     afterTweetIdExclusive: Option[Long],
@@ -87,11 +88,15 @@ object EarlybirdRequestUtil {
     authorScoreMap: Option[Map[Long, Double]] = None,
     tensorflowModel: Option[String] = None,
     ebModels: Seq[EarlybirdScoringModelConfig] = Seq.empty,
-    queryMaxNumResultsPerShard: Int = DefaultQueryMaxNumResultsPerShard
+    queryMaxNumResultsPerShard: Int = DefaultQueryMaxNumResultsPerShard,
+    enableExcludeSourceTweetIdsQuery: Boolean = false,
+    isVideoOnlyRequest: Boolean = false,
+    isRecency: Boolean = false,
+    getOlderTweets: Boolean = false,
   ): eb.EarlybirdRequest = {
 
     val QueryWithNamedDisjunctions(query, namedDisjunctionMap) = queryBuilder.create(
-      followedUserIds,
+      queryUserIds,
       retweetsMutedUserIds,
       beforeTweetIdExclusive,
       afterTweetIdExclusive,
@@ -101,28 +106,45 @@ object EarlybirdRequestUtil {
       searchOperator = SearchOperator.Exclude,
       tweetFeatures = TweetFeatures.All,
       excludedTweetIds = excludedTweetIds.getOrElse(Set.empty),
-      enableExcludeSourceTweetIdsQuery = false
+      enableExcludeSourceTweetIdsQuery = enableExcludeSourceTweetIdsQuery,
+      isVideoOnlyRequest = isVideoOnlyRequest
     )
     val ebRankingParams = getRankingParams(authorScoreMap, tensorflowModel, ebModels)
     val relOptions = RelevanceSearchUtil.RelevanceOptions.copy(
-      rankingParams = ebRankingParams
+      rankingParams = ebRankingParams,
+      returnAllResults = Some(false)
     )
 
-    val followedUserIdsSeq = followedUserIds.toSeq
+    val metadataOptions =
+      if (isRecency)
+        eb.ThriftSearchResultMetadataOptions(
+          getTweetUrls = false,
+          getResultLocation = false,
+          deprecatedGetTopicIDs = false,
+          getInReplyToStatusId = true,
+          getReferencedTweetAuthorId = true,
+          getFromUserId = true
+        )
+      else RelevanceSearchUtil.MetadataOptions
+
+    val queryUserIdsSeq = queryUserIds.toSeq
     val namedDisjunctionMapOpt =
       if (namedDisjunctionMap.isEmpty) None
       else Some(namedDisjunctionMap.mapValues(_.toSeq))
 
+    val rankingMode =
+      if (isRecency) eb.ThriftSearchRankingMode.Recency else eb.ThriftSearchRankingMode.Relevance
+
     val thriftQuery = eb.ThriftSearchQuery(
       serializedQuery = Some(query.serialize),
-      fromUserIDFilter64 = Some(followedUserIdsSeq),
+      fromUserIDFilter64 = Some(queryUserIdsSeq),
       numResults = maxCount,
       collectConversationId = true,
-      rankingMode = eb.ThriftSearchRankingMode.Relevance,
+      rankingMode = rankingMode,
       relevanceOptions = Some(relOptions),
       collectorParams = Some(mkCollectorParams(queryMaxNumResultsPerShard)),
       facetFieldNames = Some(RelevanceSearchUtil.FacetsToFetch),
-      resultMetadataOptions = Some(RelevanceSearchUtil.MetadataOptions),
+      resultMetadataOptions = Some(metadataOptions),
       searcherId = userId,
       searchStatusIds = None,
       namedDisjunctionMap = namedDisjunctionMapOpt
@@ -131,8 +153,8 @@ object EarlybirdRequestUtil {
     eb.EarlybirdRequest(
       searchQuery = thriftQuery,
       clientId = clientId,
-      getOlderResults = Some(false),
-      followedUserIds = Some(followedUserIdsSeq),
+      getOlderResults = Some(getOlderTweets),
+      followedUserIds = Some(queryUserIdsSeq),
       getProtectedTweetsOnly = Some(false),
       timeoutMs = DefaultSearchProcessingTimeout.inMilliseconds.toInt,
       skipVeryRecentTweets = skipVeryRecentTweets,
@@ -176,7 +198,8 @@ object EarlybirdRequestUtil {
       skipVeryRecentTweets = true,
       // This param decides # of tweets to return from search superRoot and realtime/protected/Archive roots.
       // It takes higher precedence than ThriftSearchQuery.numResults
-      numResultsToReturnAtRoot = Some(candidateSize)
+      numResultsToReturnAtRoot = Some(candidateSize),
+      partitionTimeoutMs = Some(DefaultFeatureHydrationTimeout.inMillis.toInt)
     )
   }
 }

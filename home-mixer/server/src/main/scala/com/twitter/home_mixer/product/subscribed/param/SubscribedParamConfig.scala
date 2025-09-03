@@ -15,4 +15,8 @@ class SubscribedParamConfig @Inject() () extends ProductParamConfig {
   override val boundedIntFSOverrides = Seq(
     ServerMaxResultsParam
   )
+
+  override val booleanFSOverrides = Seq(
+    EnablePostContextFeatureHydratorParam
+  )
 }

@@ -9,6 +9,7 @@ import com.twitter.product_mixer.core.feature.featuremap.FeatureMap
 import com.twitter.product_mixer.core.model.marshalling.response.urt.icon
 import com.twitter.product_mixer.core.model.marshalling.response.urt.metadata.BottomSheet
 import com.twitter.product_mixer.core.model.marshalling.response.urt.metadata.ChildFeedbackAction
+import com.twitter.product_mixer.core.model.marshalling.response.urt.metadata.ClientEventInfo
 import com.twitter.product_mixer.core.model.marshalling.response.urt.metadata.RichBehavior
 import com.twitter.product_mixer.core.model.marshalling.response.urt.metadata.RichFeedbackBehaviorBlockUser
 import com.twitter.product_mixer.core.product.guice.scope.ProductScoped
@@ -21,7 +22,9 @@ case class BlockUserChildFeedbackActionBuilder @Inject() (
   @ProductScoped stringCenter: StringCenter,
   externalStrings: HomeMixerExternalStrings) {
 
-  def apply(candidateFeatures: FeatureMap): Option[ChildFeedbackAction] = {
+  def apply(
+    candidateFeatures: FeatureMap
+  ): Option[ChildFeedbackAction] = {
     val userIdOpt =
       if (candidateFeatures.getOrElse(IsRetweetFeature, false))
         candidateFeatures.getOrElse(SourceUserIdFeature, None)
@@ -35,17 +38,30 @@ case class BlockUserChildFeedbackActionBuilder @Inject() (
           externalStrings.blockUserString,
           Map("username" -> userScreenName)
         )
+        val confirmation = stringCenter.prepare(
+          externalStrings.blockUserConfirmationString,
+          Map("username" -> userScreenName)
+        )
+
         ChildFeedbackAction(
           feedbackType = RichBehavior,
           prompt = Some(prompt),
-          confirmation = None,
+          confirmation = Some(confirmation),
+          subprompt = None,
           feedbackUrl = None,
           hasUndoAction = Some(true),
           confirmationDisplayType = Some(BottomSheet),
-          clientEventInfo = None,
+          clientEventInfo = Some(
+            ClientEventInfo(
+              component = None,
+              element = Some("block"),
+              details = None,
+              action = Some("click"),
+              entityToken = None
+            )
+          ),
           icon = Some(icon.No),
-          richBehavior = Some(RichFeedbackBehaviorBlockUser(userId)),
-          subprompt = None
+          richBehavior = Some(RichFeedbackBehaviorBlockUser(userId))
         )
       }
     }

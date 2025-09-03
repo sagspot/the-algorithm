@@ -30,6 +30,7 @@ case class HomeAdsClientEventDetailsBuilder(injectionType: Option[String])
         ControllerDataV2.HomeTweets(ht.HomeTweetsControllerData.V1(homeTweetsControllerDataV1))))
 
     val clientEventDetails = ClientEventDetails(
+      aiTrendDetails = None,
       conversationDetails = None,
       timelinesDetails = Some(
         TimelinesDetails(
@@ -38,7 +39,7 @@ case class HomeAdsClientEventDetailsBuilder(injectionType: Option[String])
           sourceData = None)),
       articleDetails = None,
       liveEventDetails = None,
-      commerceDetails = None
+      commerceDetails = None,
     )
 
     Some(clientEventDetails)

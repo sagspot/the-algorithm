@@ -6,8 +6,8 @@ import com.twitter.search.earlybird.{thriftscala => eb}
 object RelevanceSearchUtil {
 
   val Mentions: String = EarlybirdFieldConstant.MENTIONS_FACET
-  val Hashtags: String = EarlybirdFieldConstant.HASHTAGS_FACET
-  val FacetsToFetch: Seq[String] = Seq(Mentions, Hashtags)
+  val FacetsToFetch: Seq[String] = Seq(Mentions)
+  val MaxHitsToProcess: Int = 1500
 
   val MetadataOptions: eb.ThriftSearchResultMetadataOptions = {
     eb.ThriftSearchResultMetadataOptions(
@@ -19,7 +19,6 @@ object RelevanceSearchUtil {
       getMediaBits = true,
       getAllFeatures = true,
       returnSearchResultFeatures = true,
-      // Set getExclusiveConversationAuthorId in order to retrieve Exclusive / SuperFollow tweets.
       getExclusiveConversationAuthorId = true
     )
   }
@@ -29,10 +28,11 @@ object RelevanceSearchUtil {
       proximityScoring = true,
       maxConsecutiveSameUser = Some(2),
       rankingParams = None,
-      maxHitsToProcess = Some(500),
+      maxHitsToProcess = Some(MaxHitsToProcess),
       maxUserBlendCount = Some(3),
       proximityPhraseWeight = 9.0,
       returnAllResults = Some(true)
     )
   }
+
 }

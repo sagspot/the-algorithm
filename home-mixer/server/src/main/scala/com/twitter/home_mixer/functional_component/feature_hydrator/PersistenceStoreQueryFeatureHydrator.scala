@@ -4,11 +4,15 @@ import com.twitter.conversions.DurationOps._
 import com.twitter.common_internal.analytics.twitter_client_user_agent_parser.UserAgent
 import com.twitter.finagle.stats.StatsReceiver
 import com.twitter.home_mixer.model.HomeFeatures.PersistenceEntriesFeature
+import com.twitter.home_mixer.model.HomeFeatures.ServedAuthorIdsFeature
 import com.twitter.home_mixer.model.HomeFeatures.ServedTweetIdsFeature
 import com.twitter.home_mixer.model.HomeFeatures.ServedTweetPreviewIdsFeature
 import com.twitter.home_mixer.model.HomeFeatures.WhoToFollowExcludedUserIdsFeature
 import com.twitter.home_mixer.model.request.FollowingProduct
 import com.twitter.home_mixer.model.request.ForYouProduct
+import com.twitter.home_mixer.param.HomeGlobalParams.ExcludeServedAuthorIdsDurationParam
+import com.twitter.home_mixer.param.HomeGlobalParams.ExcludeServedTweetIdsDurationParam
+import com.twitter.home_mixer.param.HomeGlobalParams.ExcludeServedTweetIdsNumberParam
 import com.twitter.home_mixer.service.HomeMixerAlertConfig
 import com.twitter.product_mixer.core.feature.Feature
 import com.twitter.product_mixer.core.feature.featuremap.FeatureMap
@@ -24,6 +28,7 @@ import com.twitter.timelineservice.model.TimelineQuery
 import com.twitter.timelineservice.model.core.TimelineKind
 import com.twitter.timelineservice.model.rich.EntityIdType
 import com.twitter.util.Time
+
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -39,17 +44,16 @@ case class PersistenceStoreQueryFeatureHydrator @Inject() (
   private val servedTweetIdsSizeStat = scopedStatsReceiver.stat("ServedTweetIdsSize")
 
   private val WhoToFollowExcludedUserIdsLimit = 1000
-  private val ServedTweetIdsDuration = 10.minutes
-  private val ServedTweetIdsLimit = 100
   private val ServedTweetPreviewIdsDuration = 10.hours
   private val ServedTweetPreviewIdsLimit = 10
 
-  override val features: Set[Feature[_, _]] =
-    Set(
-      ServedTweetIdsFeature,
-      ServedTweetPreviewIdsFeature,
-      PersistenceEntriesFeature,
-      WhoToFollowExcludedUserIdsFeature)
+  override val features: Set[Feature[_, _]] = Set(
+    ServedTweetIdsFeature,
+    ServedTweetPreviewIdsFeature,
+    PersistenceEntriesFeature,
+    WhoToFollowExcludedUserIdsFeature,
+    ServedAuthorIdsFeature
+  )
 
   private val supportedClients = Seq(
     ClientPlatform.IPhone,
@@ -85,28 +89,47 @@ case class PersistenceStoreQueryFeatureHydrator @Inject() (
             clientAppId = query.clientContext.appId,
             userAgent = query.clientContext.userAgent.flatMap(UserAgent.fromString))
 
-          val servedTweetIds = timelineResponses
+          val recentTimelineItems = timelineResponses
             .filter(_.clientPlatform == clientPlatform)
-            .filter(_.servedTime >= Time.now - ServedTweetIdsDuration)
             .sortBy(-_.servedTime.inMilliseconds)
-            .flatMap(
-              _.entries.flatMap(_.tweetIds(includeSourceTweets = true)).take(ServedTweetIdsLimit))
+
+          val servedTweetIds = recentTimelineItems
+            .filter(_.servedTime >= Time.now - query.params(ExcludeServedTweetIdsDurationParam))
+            .flatMap(_.entries
+              .flatMap(_.tweetIds(includeSourceTweets = true)).take(
+                query.params(ExcludeServedTweetIdsNumberParam)))
 
           servedTweetIdsSizeStat.add(servedTweetIds.size)
 
-          val servedTweetPreviewIds = timelineResponses
-            .filter(_.clientPlatform == clientPlatform)
+          val servedTweetPreviewIds = recentTimelineItems
             .filter(_.servedTime >= Time.now - ServedTweetPreviewIdsDuration)
-            .sortBy(-_.servedTime.inMilliseconds)
-            .flatMap(_.entries
-              .filter(_.entityIdType == EntityIdType.TweetPreview)
-              .flatMap(_.tweetIds(includeSourceTweets = true)).take(ServedTweetPreviewIdsLimit))
+            .flatMap(
+              _.entries
+                .filter(_.entityIdType == EntityIdType.TweetPreview)
+                .flatMap(_.tweetIds(includeSourceTweets = true)).take(ServedTweetPreviewIdsLimit))
+
+          val servedAuthorIds: Map[Long, Seq[Long]] = recentTimelineItems
+            .filter(_.servedTime >= Time.now - query.params(ExcludeServedAuthorIdsDurationParam))
+            .flatMap { timelineResponse =>
+              timelineResponse.entries
+                .filter(_.entityIdType == EntityIdType.Tweet)
+                .flatMap { entry =>
+                  val authorId = entry.sourceAuthorIds.headOption.getOrElse(-1L)
+                  if (authorId != -1L) {
+                    // only include entries with valid author IDs
+                    entry.tweetIds(includeSourceTweets = true).map(tweetId => (authorId, tweetId))
+                  } else Seq.empty
+                }
+            }
+            .groupBy(_._1)
+            .mapValues(_.map(_._2).distinct)
 
           FeatureMapBuilder()
             .add(ServedTweetIdsFeature, servedTweetIds)
             .add(ServedTweetPreviewIdsFeature, servedTweetPreviewIds)
             .add(PersistenceEntriesFeature, timelineResponses)
             .add(WhoToFollowExcludedUserIdsFeature, whoToFollowUserIds)
+            .add(ServedAuthorIdsFeature, servedAuthorIds)
             .build()
         }
     }

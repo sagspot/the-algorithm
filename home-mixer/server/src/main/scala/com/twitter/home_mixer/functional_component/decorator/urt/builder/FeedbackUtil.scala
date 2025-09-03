@@ -9,7 +9,6 @@ import com.twitter.timelines.common.{thriftscala => tlc}
 import com.twitter.timelines.service.{thriftscala => t}
 import com.twitter.timelineservice.model.FeedbackInfo
 import com.twitter.timelineservice.model.FeedbackMetadata
-import com.twitter.timelineservice.suggests.{thriftscala => st}
 import com.twitter.timelineservice.{thriftscala => tlst}
 
 object FeedbackUtil {
@@ -22,8 +21,7 @@ object FeedbackUtil {
     promptExternalString: ExternalString,
     confirmationExternalString: ExternalString,
     engagementType: t.FeedbackEngagementType,
-    stringCenter: StringCenter,
-    injectionType: Option[st.SuggestType]
+    stringCenter: StringCenter
   ): Option[ChildFeedbackAction] = {
     namesByUserId.get(userId).map { userScreenName =>
       val prompt = stringCenter.prepare(
@@ -41,7 +39,7 @@ object FeedbackUtil {
       val feedbackUrl = FeedbackInfo.feedbackUrl(
         feedbackType = tlst.FeedbackType.SeeFewer,
         feedbackMetadata = feedbackMetadata,
-        injectionType = injectionType
+        injectionType = None
       )
 
       ChildFeedbackAction(

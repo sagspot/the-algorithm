@@ -1,30 +1,40 @@
 package com.twitter.home_mixer.product.for_you.side_effect
 
 import com.twitter.finagle.stats.StatsReceiver
+import com.twitter.home_mixer.model.HomeFeatures.AuthorIdFeature
 import com.twitter.home_mixer.model.HomeFeatures.InNetworkFeature
 import com.twitter.home_mixer.model.HomeFeatures.InReplyToTweetIdFeature
-import com.twitter.home_mixer.model.HomeFeatures.SuggestTypeFeature
-import com.twitter.home_mixer.product.for_you.param.ForYouParam.ExperimentStatsParam
+import com.twitter.home_mixer.model.HomeFeatures.IsRetweetFeature
+import com.twitter.home_mixer.model.HomeFeatures.ServedTypeFeature
+import com.twitter.home_mixer.param.HomeGlobalParams.Scoring.AuthorListForDataCollectionParam
+import com.twitter.home_mixer.product.for_you.param.ForYouParam.AuthorListForStatsParam
+import com.twitter.home_mixer.service.HomeMixerAlertConfig
 import com.twitter.home_mixer.util.CandidatesUtil
-import com.twitter.product_mixer.component_library.model.candidate.TweetCandidate
+import com.twitter.home_mixer.{thriftscala => hmt}
+import com.twitter.product_mixer.component_library.feature_hydrator.query.social_graph.SGSFollowedUsersFeature
 import com.twitter.product_mixer.core.functional_component.side_effect.PipelineResultSideEffect
+import com.twitter.product_mixer.core.model.common.identifier.CandidatePipelineIdentifier
 import com.twitter.product_mixer.core.model.common.identifier.SideEffectIdentifier
 import com.twitter.product_mixer.core.model.common.presentation.CandidateWithDetails
 import com.twitter.product_mixer.core.model.common.presentation.ItemCandidateWithDetails
 import com.twitter.product_mixer.core.model.marshalling.response.urt.Timeline
 import com.twitter.product_mixer.core.pipeline.PipelineQuery
 import com.twitter.stitch.Stitch
-import javax.inject.Inject
-import javax.inject.Singleton
+import com.twitter.util.logging.Logging
 
-@Singleton
-class ServedStatsSideEffect @Inject() (statsReceiver: StatsReceiver)
-    extends PipelineResultSideEffect[PipelineQuery, Timeline] {
+case class ServedStatsSideEffect(
+  candidatePipelines: Set[CandidatePipelineIdentifier],
+  statsReceiver: StatsReceiver)
+    extends PipelineResultSideEffect[PipelineQuery, Timeline]
+    with Logging {
 
   override val identifier: SideEffectIdentifier = SideEffectIdentifier("ServedStats")
 
   private val baseStatsReceiver = statsReceiver.scope(identifier.toString)
-  private val suggestTypeStatsReceiver = baseStatsReceiver.scope("SuggestType")
+  private val authorStatsReceiver = baseStatsReceiver.scope("Author")
+  private val tweetStatsReceiver = baseStatsReceiver.scope("Tweet")
+  private val servedTypeStatsReceiver = baseStatsReceiver.scope("ServedType")
+  private val followedUsersStatsReceiver = baseStatsReceiver.scope("FollowedUsers")
   private val responseSizeStatsReceiver = baseStatsReceiver.scope("ResponseSize")
   private val contentBalanceStatsReceiver = baseStatsReceiver.scope("ContentBalance")
 
@@ -41,50 +51,119 @@ class ServedStatsSideEffect @Inject() (statsReceiver: StatsReceiver)
     inputs: PipelineResultSideEffect.Inputs[PipelineQuery, Timeline]
   ): Stitch[Unit] = {
     val tweetCandidates = CandidatesUtil
-      .getItemCandidates(inputs.selectedCandidates).filter(_.isCandidateType[TweetCandidate]())
+      .getItemCandidates(inputs.selectedCandidates)
+      .filter(candidate => candidatePipelines.contains(candidate.source))
 
-    val expBucket = inputs.query.params(ExperimentStatsParam)
-
-    recordSuggestTypeStats(tweetCandidates, expBucket)
-    recordContentBalanceStats(tweetCandidates, expBucket)
-    recordResponseSizeStats(tweetCandidates, expBucket)
+    recordAuthorStats(
+      candidates = tweetCandidates,
+      authors = inputs.query.params(AuthorListForDataCollectionParam),
+      tweetLevelAuthors = inputs.query.params(AuthorListForStatsParam)
+    )
+    recordServedTypeStats(tweetCandidates)
+    recordFollowedUsersStats(
+      tweetCandidates,
+      inputs.query.features.map(_.getOrElse(SGSFollowedUsersFeature, Seq.empty).size).getOrElse(0),
+    )
+    recordContentBalanceStats(tweetCandidates)
+    recordResponseSizeStats(tweetCandidates)
+    logColdContentData(tweetCandidates, inputs.query.getRequiredUserId)
     Stitch.Unit
   }
 
-  def recordSuggestTypeStats(
-    candidates: Seq[ItemCandidateWithDetails],
-    expBucket: String
+  def recordAuthorStats(
+    candidates: Seq[CandidateWithDetails],
+    authors: Set[Long],
+    tweetLevelAuthors: Set[Long]
   ): Unit = {
-    candidates.groupBy(getSuggestType).foreach {
-      case (suggestType, suggestTypeCandidates) =>
-        suggestTypeStatsReceiver
-          .scope(expBucket).counter(suggestType).incr(suggestTypeCandidates.size)
+    val filtered = candidates
+      .filter { candidate =>
+        candidate.features.getOrElse(AuthorIdFeature, None).exists(authors.contains) &&
+        // Only include original tweets
+        (!candidate.features.getOrElse(IsRetweetFeature, false)) &&
+        candidate.features.getOrElse(InReplyToTweetIdFeature, None).isEmpty
+      }
+
+    filtered
+      .groupBy { candidate =>
+        (getServedType(candidate), candidate.features.get(AuthorIdFeature).get)
+      }
+      .foreach {
+        case ((servedType, authorId), authorCandidates) =>
+          val authorStr = authorId.toString.takeRight(9)
+          authorStatsReceiver.scope(authorStr).counter(servedType).incr(authorCandidates.size)
+      }
+
+    filtered.map { candidate =>
+      val authorId = candidate.features.get(AuthorIdFeature).get
+      val authorStr = authorId.toString.takeRight(9)
+      authorStatsReceiver.scope(authorStr).counter(candidate.candidateIdLong.toString).incr()
+      if (tweetLevelAuthors.contains(authorId))
+        tweetStatsReceiver.counter(candidate.candidateIdLong.toString.takeRight(10)).incr()
+    }
+  }
+
+  def logColdContentData(candidates: Seq[CandidateWithDetails], viewerId: Long): Unit = {
+    candidates.foreach { candidate =>
+      val servedType = candidate.features.get(ServedTypeFeature)
+      if (servedType == hmt.ServedType.ForYouContentExplorationDeepRetrievalI2i) {
+        logger.info("Tier1: " + candidate.candidateIdLong + " viewerId: " + viewerId)
+      } else if (servedType == hmt.ServedType.ForYouContentExplorationTier2DeepRetrievalI2i) {
+        logger.info("Tier2: " + candidate.candidateIdLong + " viewerId: " + viewerId)
+      }
+    }
+  }
+
+  def recordServedTypeStats(
+    candidates: Seq[ItemCandidateWithDetails],
+  ): Unit = {
+    candidates.groupBy(getServedType).foreach {
+      case (servedType, servedTypeCandidates) =>
+        servedTypeStatsReceiver.counter(servedType).incr(servedTypeCandidates.size)
+    }
+  }
+
+  def recordFollowedUsersStats(
+    candidates: Seq[ItemCandidateWithDetails],
+    followedUsers: Int,
+  ): Unit = {
+    val followedUsersScope =
+      if (followedUsers < 10) "0-9"
+      else if (followedUsers < 100) "10-99"
+      else if (followedUsers < 1000) "100-999"
+      else if (followedUsers < 10000) "1000-9999"
+      else ">10000"
+
+    candidates.groupBy(getServedType).foreach {
+      case (servedType, servedTypeCandidates) =>
+        followedUsersStatsReceiver
+          .scope(followedUsersScope).counter(servedType)
+          .incr(servedTypeCandidates.size)
     }
   }
 
   def recordContentBalanceStats(
     candidates: Seq[ItemCandidateWithDetails],
-    expBucket: String
   ): Unit = {
     val (in, oon) = candidates.partition(_.features.getOrElse(InNetworkFeature, true))
-    inNetworkStatsReceiver.counter(expBucket).incr(in.size)
-    outOfNetworkStatsReceiver.counter(expBucket).incr(oon.size)
+    inNetworkStatsReceiver.counter().incr(in.size)
+    outOfNetworkStatsReceiver.counter().incr(oon.size)
 
     val (reply, original) =
       candidates.partition(_.features.getOrElse(InReplyToTweetIdFeature, None).isDefined)
-    replyStatsReceiver.counter(expBucket).incr(reply.size)
-    originalStatsReceiver.counter(expBucket).incr(original.size)
+    replyStatsReceiver.counter().incr(reply.size)
+    originalStatsReceiver.counter().incr(original.size)
   }
 
   def recordResponseSizeStats(
     candidates: Seq[ItemCandidateWithDetails],
-    expBucket: String
   ): Unit = {
-    if (candidates.size == 0) emptyStatsReceiver.counter(expBucket).incr()
-    if (candidates.size < 5) lessThan5StatsReceiver.counter(expBucket).incr()
-    if (candidates.size < 10) lessThan10StatsReceiver.counter(expBucket).incr()
+    if (candidates.size == 0) emptyStatsReceiver.counter().incr()
+    if (candidates.size < 5) lessThan5StatsReceiver.counter().incr()
+    if (candidates.size < 10) lessThan10StatsReceiver.counter().incr()
   }
 
-  private def getSuggestType(candidate: CandidateWithDetails): String =
-    candidate.features.getOrElse(SuggestTypeFeature, None).map(_.name).getOrElse("None")
+  private def getServedType(candidate: CandidateWithDetails): String =
+    candidate.features.get(ServedTypeFeature).name
+
+  override val alerts = Seq(HomeMixerAlertConfig.BusinessHours.defaultSuccessRateAlert())
 }

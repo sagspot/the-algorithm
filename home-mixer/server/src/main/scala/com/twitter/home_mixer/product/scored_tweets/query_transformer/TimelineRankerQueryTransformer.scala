@@ -2,6 +2,7 @@ package com.twitter.home_mixer.product.scored_tweets.query_transformer
 
 import com.twitter.home_mixer.model.HomeFeatures.RealGraphInNetworkScoresFeature
 import com.twitter.home_mixer.model.request.HasDeviceContext
+import com.twitter.home_mixer.product.scored_tweets.param.ScoredTweetsParam.EarlybirdMaxResultsPerPartitionParam
 import com.twitter.home_mixer.product.scored_tweets.query_transformer.TimelineRankerQueryTransformer._
 import com.twitter.home_mixer.util.CachedScoredTweetsHelper
 import com.twitter.home_mixer.util.earlybird.EarlybirdRequestUtil
@@ -32,16 +33,11 @@ object TimelineRankerQueryTransformer {
    * early-terminating the query and reducing the hits to MaxNumEarlybirdResults.
    */
   private val EarlybirdMaxHits = 1000
-
-  /**
-   * Maximum number of results TLR should retrieve from each earlybird shard.
-   */
-  private val EarlybirdMaxResults = 300
 }
 
 trait TimelineRankerQueryTransformer[
   Query <: PipelineQuery with HasQualityFactorStatus with HasDeviceContext] {
-  def maxTweetsToFetch: Int
+  def maxTweetsToFetch(query: Query): Int
   def options: TweetKindOption.ValueSet = TweetKindOption.Default
   def candidateTweetSourceId: CandidateTweetSourceId.Value
   def utegLikedByTweetsOptions(query: Query): Option[tlr.UtegLikedByTweetsOptions] = None
@@ -68,9 +64,6 @@ trait TimelineRankerQueryTransformer[
         untilTime)
     }
 
-    val maxCount =
-      (query.getQualityFactorCurrentValue(candidatePipelineIdentifier) * maxTweetsToFetch).toInt
-
     val authorScoreMap = query.features
       .map(_.getOrElse(RealGraphInNetworkScoresFeature, Map.empty[UserId, Double]))
       .getOrElse(Map.empty)
@@ -82,7 +75,7 @@ trait TimelineRankerQueryTransformer[
 
     val earlyBirdOptions = EarlybirdOptions(
       maxNumHitsPerShard = EarlybirdMaxHits,
-      maxNumResultsPerShard = EarlybirdMaxResults,
+      maxNumResultsPerShard = query.params(EarlybirdMaxResultsPerPartitionParam),
       models = earlybirdModels,
       authorScoreMap = authorScoreMap,
       skipVeryRecentTweets = true,
@@ -91,7 +84,7 @@ trait TimelineRankerQueryTransformer[
 
     tlr.RecapQuery(
       userId = query.getRequiredUserId,
-      maxCount = Some(maxCount),
+      maxCount = Some(maxTweetsToFetch(query)),
       range = Some(range),
       options = options,
       searchOperator = SearchOperator.Exclude,

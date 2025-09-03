@@ -2,10 +2,11 @@ package com.twitter.home_mixer.product.scored_tweets.query_transformer
 
 import com.twitter.conversions.DurationOps._
 import com.twitter.core_workflows.user_model.{thriftscala => um}
+import com.twitter.home_mixer.functional_component.feature_hydrator.FrsSeedUserIdsFeature
 import com.twitter.home_mixer.model.HomeFeatures.UserStateFeature
 import com.twitter.home_mixer.model.request.HasDeviceContext
-import com.twitter.home_mixer.product.scored_tweets.feature_hydrator.FrsSeedUserIdsFeature
 import com.twitter.home_mixer.product.scored_tweets.param.ScoredTweetsParam
+import com.twitter.home_mixer.product.scored_tweets.param.ScoredTweetsParam.FetchParams
 import com.twitter.home_mixer.product.scored_tweets.query_transformer.TimelineRankerFrsQueryTransformer._
 import com.twitter.product_mixer.core.functional_component.transformer.CandidatePipelineQueryTransformer
 import com.twitter.product_mixer.core.model.common.identifier.CandidatePipelineIdentifier
@@ -18,8 +19,6 @@ import com.twitter.timelines.model.candidate.CandidateTweetSourceId
 object TimelineRankerFrsQueryTransformer {
   private val DefaultSinceDuration = 24.hours
   private val ExpandedSinceDuration = 48.hours
-  private val MaxTweetsToFetch = 100
-
   private val tweetKindOptions: TweetKindOption.ValueSet =
     TweetKindOption(includeOriginalTweetsAndQuotes = true)
 
@@ -36,13 +35,14 @@ object TimelineRankerFrsQueryTransformer {
 case class TimelineRankerFrsQueryTransformer[
   Query <: PipelineQuery with HasQualityFactorStatus with HasDeviceContext
 ](
-  override val candidatePipelineIdentifier: CandidatePipelineIdentifier,
-  override val maxTweetsToFetch: Int = MaxTweetsToFetch)
+  override val candidatePipelineIdentifier: CandidatePipelineIdentifier)
     extends CandidatePipelineQueryTransformer[Query, t.RecapQuery]
     with TimelineRankerQueryTransformer[Query] {
 
   override val candidateTweetSourceId = CandidateTweetSourceId.FrsTweet
   override val options = tweetKindOptions
+  override def maxTweetsToFetch(query: Query): Int =
+    query.params(FetchParams.FRSMaxTweetsToFetchParam)
 
   override def getTensorflowModel(query: Query): Option[String] = {
     Some(query.params(ScoredTweetsParam.EarlybirdTensorflowModel.FrsParam))

@@ -1,7 +1,6 @@
 package com.twitter.home_mixer.functional_component.decorator.urt.builder
 
-import com.twitter.home_mixer.model.HomeFeatures.PerspectiveFilteredLikedByUserIdsFeature
-import com.twitter.home_mixer.model.HomeFeatures.SGSValidLikedByUserIdsFeature
+import com.twitter.home_mixer.model.HomeFeatures.ValidLikedByUserIdsFeature
 import com.twitter.home_mixer.product.following.model.HomeMixerExternalStrings
 import com.twitter.product_mixer.component_library.model.candidate.TweetCandidate
 import com.twitter.product_mixer.core.feature.featuremap.FeatureMap
@@ -39,11 +38,7 @@ case class LikedBySocialContextBuilder @Inject() (
   ): Option[SocialContext] = {
 
     // Liked by users are valid only if they pass both the SGS and Perspective filters.
-    val validLikedByUserIds =
-      candidateFeatures
-        .getOrElse(SGSValidLikedByUserIdsFeature, Nil)
-        .filter(
-          candidateFeatures.getOrElse(PerspectiveFilteredLikedByUserIdsFeature, Nil).toSet.contains)
+    val validLikedByUserIds = candidateFeatures.getOrElse(ValidLikedByUserIdsFeature, Nil)
 
     engagerSocialContextBuilder(
       socialContextIds = validLikedByUserIds,

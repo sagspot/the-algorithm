@@ -1,33 +1,33 @@
 package com.twitter.home_mixer.product.subscribed
 
 import com.twitter.clientapp.{thriftscala => ca}
+import com.twitter.home_mixer.{thriftscala => hmt}
 import com.twitter.home_mixer.candidate_pipeline.ConversationServiceCandidatePipelineConfigBuilder
 import com.twitter.home_mixer.candidate_pipeline.EditedTweetsCandidatePipelineConfig
 import com.twitter.home_mixer.candidate_pipeline.NewTweetsPillCandidatePipelineConfig
-import com.twitter.home_mixer.functional_component.decorator.HomeConversationServiceCandidateDecorator
-import com.twitter.home_mixer.functional_component.decorator.urt.builder.HomeFeedbackActionInfoBuilder
 import com.twitter.home_mixer.functional_component.feature_hydrator._
 import com.twitter.home_mixer.functional_component.selector.UpdateHomeClientEventDetails
 import com.twitter.home_mixer.functional_component.selector.UpdateNewTweetsPillDecoration
 import com.twitter.home_mixer.functional_component.side_effect._
-import com.twitter.home_mixer.model.GapIncludeInstruction
 import com.twitter.home_mixer.param.HomeGlobalParams.MaxNumberReplaceInstructionsParam
 import com.twitter.home_mixer.param.HomeMixerFlagName.ScribeClientEventsFlag
 import com.twitter.home_mixer.product.following.model.HomeMixerExternalStrings
 import com.twitter.home_mixer.product.subscribed.model.SubscribedQuery
+import com.twitter.home_mixer.product.subscribed.param.SubscribedParam.EnablePostContextFeatureHydratorParam
 import com.twitter.home_mixer.product.subscribed.param.SubscribedParam.ServerMaxResultsParam
 import com.twitter.home_mixer.util.CandidatesUtil
 import com.twitter.inject.annotations.Flag
 import com.twitter.logpipeline.client.common.EventPublisher
 import com.twitter.product_mixer.component_library.feature_hydrator.query.async.AsyncQueryFeatureHydrator
 import com.twitter.product_mixer.component_library.feature_hydrator.query.impressed_tweets.ImpressedTweetsQueryFeatureHydrator
+import com.twitter.product_mixer.component_library.feature_hydrator.query.location.UserLocationQueryFeatureHydrator
 import com.twitter.product_mixer.component_library.feature_hydrator.query.social_graph.SGSFollowedUsersQueryFeatureHydrator
 import com.twitter.product_mixer.component_library.feature_hydrator.query.social_graph.SGSSubscribedUsersQueryFeatureHydrator
-import com.twitter.product_mixer.component_library.gate.NonEmptyCandidatesGate
 import com.twitter.product_mixer.component_library.model.candidate.TweetCandidate
 import com.twitter.product_mixer.component_library.premarshaller.urt.UrtDomainMarshaller
 import com.twitter.product_mixer.component_library.premarshaller.urt.builder.AddEntriesWithReplaceAndShowAlertInstructionBuilder
 import com.twitter.product_mixer.component_library.premarshaller.urt.builder.OrderedBottomCursorBuilder
+import com.twitter.product_mixer.component_library.premarshaller.urt.builder.OrderedCursorIdSelector.TweetIdSelector
 import com.twitter.product_mixer.component_library.premarshaller.urt.builder.OrderedGapCursorBuilder
 import com.twitter.product_mixer.component_library.premarshaller.urt.builder.OrderedTopCursorBuilder
 import com.twitter.product_mixer.component_library.premarshaller.urt.builder.ReplaceAllEntries
@@ -35,6 +35,7 @@ import com.twitter.product_mixer.component_library.premarshaller.urt.builder.Rep
 import com.twitter.product_mixer.component_library.premarshaller.urt.builder.ShowAlertInstructionBuilder
 import com.twitter.product_mixer.component_library.premarshaller.urt.builder.StaticTimelineScribeConfigBuilder
 import com.twitter.product_mixer.component_library.premarshaller.urt.builder.UrtMetadataBuilder
+import com.twitter.product_mixer.component_library.premarshaller.urt.builder.earlybird.EarlybirdGapIncludeInstruction
 import com.twitter.product_mixer.component_library.selector.DropMaxCandidates
 import com.twitter.product_mixer.component_library.selector.InsertAppendResults
 import com.twitter.product_mixer.component_library.selector.SelectConditionally
@@ -47,13 +48,10 @@ import com.twitter.product_mixer.core.functional_component.marshaller.response.u
 import com.twitter.product_mixer.core.functional_component.premarshaller.DomainMarshaller
 import com.twitter.product_mixer.core.functional_component.selector.Selector
 import com.twitter.product_mixer.core.functional_component.side_effect.PipelineResultSideEffect
-import com.twitter.product_mixer.core.model.common.UniversalNoun
 import com.twitter.product_mixer.core.model.common.identifier.CandidatePipelineIdentifier
 import com.twitter.product_mixer.core.model.common.identifier.MixerPipelineIdentifier
 import com.twitter.product_mixer.core.model.marshalling.response.urt.Timeline
-import com.twitter.product_mixer.core.model.marshalling.response.urt.TimelineModule
 import com.twitter.product_mixer.core.model.marshalling.response.urt.TimelineScribeConfig
-import com.twitter.product_mixer.core.model.marshalling.response.urt.item.tweet.TweetItem
 import com.twitter.product_mixer.core.pipeline.FailOpenPolicy
 import com.twitter.product_mixer.core.pipeline.candidate.CandidatePipelineConfig
 import com.twitter.product_mixer.core.pipeline.candidate.DependentCandidatePipelineConfig
@@ -71,7 +69,6 @@ class SubscribedMixerPipelineConfig @Inject() (
   conversationServiceCandidatePipelineConfigBuilder: ConversationServiceCandidatePipelineConfigBuilder[
     SubscribedQuery
   ],
-  homeFeedbackActionInfoBuilder: HomeFeedbackActionInfoBuilder,
   editedTweetsCandidatePipelineConfig: EditedTweetsCandidatePipelineConfig,
   newTweetsPillCandidatePipelineConfig: NewTweetsPillCandidatePipelineConfig[SubscribedQuery],
   dismissInfoQueryFeatureHydrator: DismissInfoQueryFeatureHydrator,
@@ -79,12 +76,9 @@ class SubscribedMixerPipelineConfig @Inject() (
   requestQueryFeatureHydrator: RequestQueryFeatureHydrator[SubscribedQuery],
   sgsFollowedUsersQueryFeatureHydrator: SGSFollowedUsersQueryFeatureHydrator,
   sgsSubscribedUsersQueryFeatureHydrator: SGSSubscribedUsersQueryFeatureHydrator,
-  manhattanTweetImpressionsQueryFeatureHydrator: TweetImpressionsQueryFeatureHydrator[
-    SubscribedQuery
-  ],
   memcacheTweetImpressionsQueryFeatureHydrator: ImpressedTweetsQueryFeatureHydrator,
+  userLocationQueryFeatureHydrator: UserLocationQueryFeatureHydrator,
   publishClientSentImpressionsEventBusSideEffect: PublishClientSentImpressionsEventBusSideEffect,
-  publishClientSentImpressionsManhattanSideEffect: PublishClientSentImpressionsManhattanSideEffect,
   homeTimelineServedCandidatesSideEffect: HomeScribeServedCandidatesSideEffect,
   clientEventsScribeEventPublisher: EventPublisher[ca.LogEvent],
   externalStrings: HomeMixerExternalStrings,
@@ -104,7 +98,7 @@ class SubscribedMixerPipelineConfig @Inject() (
     sgsSubscribedUsersQueryFeatureHydrator,
     AsyncQueryFeatureHydrator(dependentCandidatesStep, dismissInfoQueryFeatureHydrator),
     AsyncQueryFeatureHydrator(dependentCandidatesStep, gizmoduckUserQueryFeatureHydrator),
-    AsyncQueryFeatureHydrator(resultSelectorsStep, manhattanTweetImpressionsQueryFeatureHydrator),
+    AsyncQueryFeatureHydrator(dependentCandidatesStep, userLocationQueryFeatureHydrator),
     AsyncQueryFeatureHydrator(resultSelectorsStep, memcacheTweetImpressionsQueryFeatureHydrator)
   )
 
@@ -113,8 +107,9 @@ class SubscribedMixerPipelineConfig @Inject() (
 
   private val conversationServiceCandidatePipelineConfig =
     conversationServiceCandidatePipelineConfigBuilder.build(
-      Seq(NonEmptyCandidatesGate(earlybirdCandidatePipelineScope)),
-      HomeConversationServiceCandidateDecorator(homeFeedbackActionInfoBuilder)
+      earlybirdCandidatePipelineScope,
+      hmt.ServedType.Subscribed,
+      EnablePostContextFeatureHydratorParam
     )
 
   override val candidatePipelines: Seq[CandidatePipelineConfig[SubscribedQuery, _, _, _]] =
@@ -178,8 +173,7 @@ class SubscribedMixerPipelineConfig @Inject() (
   override val resultSideEffects: Seq[PipelineResultSideEffect[SubscribedQuery, Timeline]] = Seq(
     homeScribeClientEventSideEffect,
     homeTimelineServedCandidatesSideEffect,
-    publishClientSentImpressionsEventBusSideEffect,
-    publishClientSentImpressionsManhattanSideEffect
+    publishClientSentImpressionsEventBusSideEffect
   )
 
   override val domainMarshaller: DomainMarshaller[SubscribedQuery, Timeline] = {
@@ -189,25 +183,14 @@ class SubscribedMixerPipelineConfig @Inject() (
       ShowAlertInstructionBuilder(),
     )
 
-    val idSelector: PartialFunction[UniversalNoun[_], Long] = {
-      // exclude ads while determining tweet cursor values
-      case item: TweetItem if item.promotedMetadata.isEmpty => item.id
-      case module: TimelineModule
-          if module.items.headOption.exists(_.item.isInstanceOf[TweetItem]) =>
-        module.items.last.item match { case item: TweetItem => item.id }
-    }
-
-    val topCursorBuilder = OrderedTopCursorBuilder(idSelector)
+    val topCursorBuilder = OrderedTopCursorBuilder(TweetIdSelector)
     val bottomCursorBuilder =
-      OrderedBottomCursorBuilder(idSelector, GapIncludeInstruction.inverse())
-    val gapCursorBuilder = OrderedGapCursorBuilder(idSelector, GapIncludeInstruction)
+      OrderedBottomCursorBuilder(TweetIdSelector, EarlybirdGapIncludeInstruction.inverse())
+    val gapCursorBuilder = OrderedGapCursorBuilder(TweetIdSelector, EarlybirdGapIncludeInstruction)
 
-    val metadataBuilder = UrtMetadataBuilder(
-      title = None,
-      scribeConfigBuilder = Some(
-        StaticTimelineScribeConfigBuilder(
-          TimelineScribeConfig(page = Some("subscribed"), section = None, entityToken = None)))
-    )
+    val scribeConfigBuilder =
+      StaticTimelineScribeConfigBuilder(TimelineScribeConfig(Some("subscribed"), None, None))
+    val metadataBuilder = UrtMetadataBuilder(scribeConfigBuilder = Some(scribeConfigBuilder))
 
     UrtDomainMarshaller(
       instructionBuilders = instructionBuilders,

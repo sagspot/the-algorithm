@@ -1,17 +1,16 @@
 package com.twitter.home_mixer.product.scored_tweets.candidate_pipeline
 
+import com.twitter.home_mixer.functional_component.feature_hydrator.TweetEntityServiceFeatureHydrator
+import com.twitter.home_mixer.functional_component.filter.HasAuthorFilter
 import com.twitter.home_mixer.functional_component.filter.ReplyFilter
-import com.twitter.home_mixer.model.HomeFeatures.AuthorIdFeature
+import com.twitter.home_mixer.model.HomeFeatures.CachedScoredTweetsFeature
 import com.twitter.home_mixer.model.HomeFeatures.TimelineServiceTweetsFeature
-import com.twitter.home_mixer.product.scored_tweets.feature_hydrator.TweetypieStaticEntitiesFeatureHydrator
-import com.twitter.home_mixer.product.scored_tweets.gate.MinCachedTweetsGate
+import com.twitter.home_mixer.product.scored_tweets.gate.DenyLowSignalUserGate
 import com.twitter.home_mixer.product.scored_tweets.gate.MinTimeSinceLastRequestGate
 import com.twitter.home_mixer.product.scored_tweets.model.ScoredTweetsQuery
-import com.twitter.home_mixer.product.scored_tweets.param.ScoredTweetsParam.CachedScoredTweets
-import com.twitter.home_mixer.product.scored_tweets.param.ScoredTweetsParam.CandidatePipeline
 import com.twitter.home_mixer.product.scored_tweets.param.ScoredTweetsParam.EnableBackfillCandidatePipelineParam
 import com.twitter.home_mixer.product.scored_tweets.response_transformer.ScoredTweetsBackfillResponseFeatureTransformer
-import com.twitter.product_mixer.component_library.filter.PredicateFeatureFilter
+import com.twitter.product_mixer.component_library.gate.EmptySeqFeatureGate
 import com.twitter.product_mixer.component_library.gate.NonEmptySeqFeatureGate
 import com.twitter.product_mixer.component_library.model.candidate.TweetCandidate
 import com.twitter.product_mixer.core.functional_component.candidate_source.CandidateSource
@@ -24,16 +23,14 @@ import com.twitter.product_mixer.core.functional_component.transformer.Candidate
 import com.twitter.product_mixer.core.functional_component.transformer.CandidatePipelineResultsTransformer
 import com.twitter.product_mixer.core.model.common.identifier.CandidatePipelineIdentifier
 import com.twitter.product_mixer.core.model.common.identifier.CandidateSourceIdentifier
-import com.twitter.product_mixer.core.model.common.identifier.FilterIdentifier
 import com.twitter.product_mixer.core.pipeline.candidate.CandidatePipelineConfig
 import com.twitter.timelines.configapi.FSParam
-import com.twitter.timelines.configapi.decider.DeciderParam
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
 class ScoredTweetsBackfillCandidatePipelineConfig @Inject() (
-  tweetypieStaticEntitiesHydrator: TweetypieStaticEntitiesFeatureHydrator)
+  tweetEntityServiceFeatureHydrator: TweetEntityServiceFeatureHydrator)
     extends CandidatePipelineConfig[
       ScoredTweetsQuery,
       ScoredTweetsQuery,
@@ -44,19 +41,15 @@ class ScoredTweetsBackfillCandidatePipelineConfig @Inject() (
   override val identifier: CandidatePipelineIdentifier =
     CandidatePipelineIdentifier("ScoredTweetsBackfill")
 
-  private val HasAuthorFilterId = "HasAuthor"
-
-  override val enabledDeciderParam: Option[DeciderParam[Boolean]] =
-    Some(CandidatePipeline.EnableBackfillParam)
-
   override val supportedClientParam: Option[FSParam[Boolean]] =
     Some(EnableBackfillCandidatePipelineParam)
 
   override val gates: Seq[Gate[ScoredTweetsQuery]] =
     Seq(
       MinTimeSinceLastRequestGate,
+      DenyLowSignalUserGate,
       NonEmptySeqFeatureGate(TimelineServiceTweetsFeature),
-      MinCachedTweetsGate(identifier, CachedScoredTweets.MinCachedTweetsParam)
+      EmptySeqFeatureGate(CachedScoredTweetsFeature)
     )
 
   override val queryTransformer: CandidatePipelineQueryTransformer[
@@ -82,13 +75,10 @@ class ScoredTweetsBackfillCandidatePipelineConfig @Inject() (
 
   override val preFilterFeatureHydrationPhase1: Seq[
     BaseCandidateFeatureHydrator[ScoredTweetsQuery, TweetCandidate, _]
-  ] = Seq(tweetypieStaticEntitiesHydrator)
+  ] = Seq(tweetEntityServiceFeatureHydrator)
 
   override val filters: Seq[Filter[ScoredTweetsQuery, TweetCandidate]] = Seq(
     ReplyFilter,
-    PredicateFeatureFilter.fromPredicate(
-      FilterIdentifier(HasAuthorFilterId),
-      shouldKeepCandidate = _.getOrElse(AuthorIdFeature, None).isDefined
-    )
+    HasAuthorFilter
   )
 }

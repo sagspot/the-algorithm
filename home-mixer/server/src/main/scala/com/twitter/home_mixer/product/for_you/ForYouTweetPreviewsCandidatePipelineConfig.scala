@@ -1,27 +1,32 @@
 package com.twitter.home_mixer.product.for_you
 
-import com.twitter.home_mixer.functional_component.candidate_source.EarlybirdCandidateSource
 import com.twitter.home_mixer.functional_component.decorator.urt.builder.HomeFeedbackActionInfoBuilder
 import com.twitter.home_mixer.functional_component.filter.DropMaxCandidatesFilter
 import com.twitter.home_mixer.functional_component.filter.PreviouslyServedTweetPreviewsFilter
+import com.twitter.home_mixer.functional_component.filter.TweetHydrationFilter
+import com.twitter.home_mixer.functional_component.gate.PersistenceStoreDurationValidationGate
+import com.twitter.home_mixer.functional_component.gate.RateLimitGate
 import com.twitter.home_mixer.functional_component.gate.TimelinesPersistenceStoreLastInjectionGate
 import com.twitter.home_mixer.model.HomeFeatures.AuthorEnabledPreviewsFeature
-import com.twitter.home_mixer.model.HomeFeatures.IsHydratedFeature
-import com.twitter.home_mixer.model.HomeFeatures.PersistenceEntriesFeature
+import com.twitter.home_mixer.product.for_you.feature_hydrator.ArticlePreviewTextFeatureHydrator
 import com.twitter.home_mixer.product.for_you.feature_hydrator.AuthorEnabledPreviewsFeatureHydrator
 import com.twitter.home_mixer.product.for_you.feature_hydrator.TweetPreviewTweetypieCandidateFeatureHydrator
 import com.twitter.home_mixer.product.for_you.filter.TweetPreviewTextFilter
 import com.twitter.home_mixer.product.for_you.model.ForYouQuery
+import com.twitter.home_mixer.product.for_you.param.ForYouParam.EnableArticlePreviewTextHydrationParam
 import com.twitter.home_mixer.product.for_you.param.ForYouParam.EnableTweetPreviewsCandidatePipelineParam
 import com.twitter.home_mixer.product.for_you.param.ForYouParam.TweetPreviewsMaxCandidatesParam
 import com.twitter.home_mixer.product.for_you.param.ForYouParam.TweetPreviewsMinInjectionIntervalParam
 import com.twitter.home_mixer.product.for_you.query_transformer.TweetPreviewsQueryTransformer
 import com.twitter.home_mixer.product.for_you.response_transformer.TweetPreviewResponseFeatureTransformer
 import com.twitter.home_mixer.service.HomeMixerAlertConfig
+import com.twitter.home_mixer.{thriftscala => hmt}
+import com.twitter.product_mixer.component_library.candidate_source.earlybird.EarlybirdTweetCandidateSource
 import com.twitter.product_mixer.component_library.decorator.urt.UrtItemCandidateDecorator
 import com.twitter.product_mixer.component_library.decorator.urt.builder.contextual_ref.ContextualTweetRefBuilder
 import com.twitter.product_mixer.component_library.decorator.urt.builder.item.tweet.TweetCandidateUrtItemBuilder
 import com.twitter.product_mixer.component_library.decorator.urt.builder.metadata.ClientEventInfoBuilder
+import com.twitter.product_mixer.component_library.feature_hydrator.candidate.param_gated.ParamGatedCandidateFeatureHydrator
 import com.twitter.product_mixer.component_library.feature_hydrator.query.social_graph.PreviewCreatorsFeature
 import com.twitter.product_mixer.component_library.filter.FeatureFilter
 import com.twitter.product_mixer.component_library.gate.NonEmptySeqFeatureGate
@@ -43,19 +48,17 @@ import com.twitter.product_mixer.core.pipeline.PipelineQuery
 import com.twitter.product_mixer.core.pipeline.candidate.CandidatePipelineConfig
 import com.twitter.search.earlybird.{thriftscala => eb}
 import com.twitter.timelines.configapi.FSParam
-import com.twitter.timelines.injection.scribe.InjectionScribeUtil
 import com.twitter.timelineservice.model.rich.EntityIdType
-import com.twitter.timelineservice.suggests.{thriftscala => st}
-
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
 class ForYouTweetPreviewsCandidatePipelineConfig @Inject() (
-  earlybirdCandidateSource: EarlybirdCandidateSource,
+  earlybirdTweetCandidateSource: EarlybirdTweetCandidateSource,
   authorEnabledPreviewsFeatureHydrator: AuthorEnabledPreviewsFeatureHydrator,
   tweetPreviewsQueryTransformer: TweetPreviewsQueryTransformer,
   tweetPreviewTweetypieCandidateFeatureHydrator: TweetPreviewTweetypieCandidateFeatureHydrator,
+  articlePreviewTextFeatureHydrator: ArticlePreviewTextFeatureHydrator,
   homeFeedbackActionInfoBuilder: HomeFeedbackActionInfoBuilder)
     extends CandidatePipelineConfig[
       ForYouQuery,
@@ -71,9 +74,10 @@ class ForYouTweetPreviewsCandidatePipelineConfig @Inject() (
 
   override val gates: Seq[Gate[ForYouQuery]] = {
     Seq(
+      RateLimitGate,
+      PersistenceStoreDurationValidationGate(),
       TimelinesPersistenceStoreLastInjectionGate(
         TweetPreviewsMinInjectionIntervalParam,
-        PersistenceEntriesFeature,
         EntityIdType.TweetPreview
       ),
       NonEmptySeqFeatureGate(PreviewCreatorsFeature)
@@ -88,7 +92,7 @@ class ForYouTweetPreviewsCandidatePipelineConfig @Inject() (
   override val candidateSource: CandidateSourceWithExtractedFeatures[
     eb.EarlybirdRequest,
     eb.ThriftSearchResult
-  ] = earlybirdCandidateSource
+  ] = earlybirdTweetCandidateSource
 
   override val featuresFromCandidateSourceTransformers: Seq[
     CandidateFeatureTransformer[eb.ThriftSearchResult]
@@ -106,21 +110,31 @@ class ForYouTweetPreviewsCandidatePipelineConfig @Inject() (
     tweetPreviewTweetypieCandidateFeatureHydrator,
   )
 
+  override val preFilterFeatureHydrationPhase2: Seq[
+    BaseCandidateFeatureHydrator[ForYouQuery, TweetCandidate, _]
+  ] = Seq(
+    ParamGatedCandidateFeatureHydrator(
+      candidateFeatureHydrator = articlePreviewTextFeatureHydrator,
+      enabledParam = EnableArticlePreviewTextHydrationParam))
+
   override val filters: Seq[
     Filter[ForYouQuery, TweetCandidate]
   ] = Seq(
     PreviouslyServedTweetPreviewsFilter,
-    FeatureFilter
-      .fromFeature(FilterIdentifier("TweetPreviewVisibilityFiltering"), IsHydratedFeature),
+    TweetHydrationFilter,
     FeatureFilter
       .fromFeature(FilterIdentifier("AuthorEnabledPreviews"), AuthorEnabledPreviewsFeature),
     TweetPreviewTextFilter,
+    // NOTE: since earlybird returns candidates sorted by score, this will filter
+    // for the top scoring candidates. Should be updated in the future to not assume order of
+    // candidates from earlybird.
     DropMaxCandidatesFilter(TweetPreviewsMaxCandidatesParam)
   )
 
   override val decorator: Option[CandidateDecorator[PipelineQuery, TweetCandidate]] = {
-    val component = InjectionScribeUtil.scribeComponent(st.SuggestType.TweetPreview).get
-    val clientEventInfoBuilder = ClientEventInfoBuilder[PipelineQuery, TweetCandidate](component)
+    val clientEventInfoBuilder =
+      ClientEventInfoBuilder[PipelineQuery, TweetCandidate](
+        hmt.ServedType.ForYouTweetPreview.originalName)
 
     val tweetItemBuilder = TweetCandidateUrtItemBuilder[PipelineQuery, TweetCandidate](
       clientEventInfoBuilder = clientEventInfoBuilder,

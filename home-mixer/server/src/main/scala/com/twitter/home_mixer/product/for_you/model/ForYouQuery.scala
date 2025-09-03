@@ -26,8 +26,7 @@ case class ForYouQuery(
   override val features: Option[FeatureMap],
   override val deviceContext: Option[DeviceContext],
   override val seenTweetIds: Option[Seq[Long]],
-  override val dspClientContext: Option[dsp.DspClientContext],
-  pushToHomeTweetId: Option[Long])
+  override val dspClientContext: Option[dsp.DspClientContext])
     extends PipelineQuery
     with HasPipelineCursor[UrtOrderedCursor]
     with HasDeviceContext

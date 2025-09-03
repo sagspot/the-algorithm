@@ -33,7 +33,7 @@ object EarlybirdAdapter extends TimelinesMutatingAdapterBase[Option[sc.ThriftTwe
     RecapFeatures.HAS_CARD,
     RecapFeatures.HAS_CONSUMER_VIDEO,
     RecapFeatures.HAS_HASHTAG,
-    RecapFeatures.HAS_IMAGE,
+//    RecapFeatures.HAS_IMAGE,
     RecapFeatures.HAS_LINK,
     RecapFeatures.HAS_MENTION,
     RecapFeatures.HAS_MULTIPLE_HASHTAGS_OR_TRENDS,
@@ -44,7 +44,7 @@ object EarlybirdAdapter extends TimelinesMutatingAdapterBase[Option[sc.ThriftTwe
     RecapFeatures.HAS_PERISCOPE,
     RecapFeatures.HAS_PRO_VIDEO,
     RecapFeatures.HAS_TREND,
-    RecapFeatures.HAS_VIDEO,
+//    RecapFeatures.HAS_VIDEO,
     RecapFeatures.HAS_VINE,
     RecapFeatures.HAS_VISIBLE_LINK,
     RecapFeatures.IS_AUTHOR_BOT,
@@ -196,9 +196,9 @@ object EarlybirdAdapter extends TimelinesMutatingAdapterBase[Option[sc.ThriftTwe
       richDataRecord
         .setFeatureValue[JBoolean](RecapFeatures.HAS_NATIVE_IMAGE, features.hasNativeImage)
       richDataRecord.setFeatureValue[JBoolean](RecapFeatures.HAS_CARD, features.hasCard)
-      richDataRecord.setFeatureValue[JBoolean](RecapFeatures.HAS_IMAGE, features.hasImage)
+//      richDataRecord.setFeatureValue[JBoolean](RecapFeatures.HAS_IMAGE, features.hasImage) //handled via TweetEntityServiceContentFeatureHydrator
       richDataRecord.setFeatureValue[JBoolean](RecapFeatures.HAS_NEWS, features.hasNews)
-      richDataRecord.setFeatureValue[JBoolean](RecapFeatures.HAS_VIDEO, features.hasVideo)
+//      richDataRecord.setFeatureValue[JBoolean](RecapFeatures.HAS_VIDEO, features.hasVideo) //handled via TweetEntityServiceContentFeatureHydrator
       richDataRecord.setFeatureValue[JBoolean](RecapFeatures.CONTAINS_MEDIA, features.containsMedia)
       richDataRecord
         .setFeatureValue[JBoolean](RecapFeatures.RETWEET_SEARCHER, features.retweetSearcher)

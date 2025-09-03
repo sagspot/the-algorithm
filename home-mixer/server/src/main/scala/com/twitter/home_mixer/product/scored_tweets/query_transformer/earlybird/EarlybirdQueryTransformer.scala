@@ -1,9 +1,9 @@
 package com.twitter.home_mixer.product.scored_tweets.query_transformer.earlybird
 
-import com.twitter.home_mixer.model.HomeFeatures.RealGraphInNetworkScoresFeature
 import com.twitter.home_mixer.model.request.HasDeviceContext
 import com.twitter.home_mixer.util.CachedScoredTweetsHelper
 import com.twitter.home_mixer.util.earlybird.EarlybirdRequestUtil
+import com.twitter.product_mixer.component_library.feature_hydrator.query.social_graph.SGSFollowedUsersFeature
 import com.twitter.product_mixer.core.model.common.identifier.CandidatePipelineIdentifier
 import com.twitter.product_mixer.core.pipeline.PipelineQuery
 import com.twitter.product_mixer.core.quality_factor.HasQualityFactorStatus
@@ -21,17 +21,53 @@ trait EarlybirdQueryTransformer[
   def clientId: Option[String] = None
   def maxTweetsToFetch: Int = 100
   def tweetKindOptions: TweetKindOption.ValueSet
-  def tensorflowModel: Option[String] = None
+  def getTensorflowModel(query: Query): Option[String] = None
+  def enableExcludeSourceTweetIdsQuery: Boolean = false
 
   private val EarlybirdMaxExcludedTweets = 1500
 
-  def buildEarlybirdQuery(
+  protected def getFollowedUsers(query: Query): Set[Long] = {
+    query.features
+      .map(_.getOrElse(SGSFollowedUsersFeature, Seq.empty)).getOrElse(
+        Nil).toSet + query.getRequiredUserId
+  }
+
+  protected def buildEarlybirdQuery(
     query: Query,
     sinceDuration: Duration,
-    followedUserIds: Set[Long] = Set.empty
+    queryUserIds: Set[Long] = Set.empty,
+    authorScoreMap: Option[Map[Long, Double]] = None,
+    isVideoOnlyRequest: Boolean = false,
+    getOlderTweets: Boolean = false,
+    isRecency: Boolean = false,
+    until: Time = Time.now
+  ): eb.EarlybirdRequest = {
+    buildEarlybirdQueryWithTweetKindOptions(
+      query,
+      sinceDuration,
+      queryUserIds,
+      authorScoreMap,
+      tweetKindOptions,
+      isVideoOnlyRequest,
+      getOlderTweets,
+      isRecency,
+      until
+    )
+  }
+
+  protected def buildEarlybirdQueryWithTweetKindOptions(
+    query: Query,
+    sinceDuration: Duration,
+    queryUserIds: Set[Long] = Set.empty,
+    authorScoreMap: Option[Map[Long, Double]] = None,
+    tweetKindOptions: TweetKindOption.ValueSet,
+    isVideoOnlyRequest: Boolean = false,
+    getOlderTweets: Boolean = false,
+    isRecency: Boolean = false,
+    until: Time = Time.now
   ): eb.EarlybirdRequest = {
     val sinceTime: Time = sinceDuration.ago
-    val untilTime: Time = Time.now
+    val untilTime: Time = until
 
     val fromTweetIdExclusive = SnowflakeSortIndexHelper.timestampToFakeId(sinceTime)
     val toTweetIdExclusive = SnowflakeSortIndexHelper.timestampToFakeId(untilTime)
@@ -45,26 +81,23 @@ trait EarlybirdQueryTransformer[
         untilTime)
     }
 
-    val maxCount =
-      (query.getQualityFactorCurrentValue(candidatePipelineIdentifier) * maxTweetsToFetch).toInt
-
-    val authorScoreMap = query.features
-      .map(_.getOrElse(RealGraphInNetworkScoresFeature, Map.empty[Long, Double]))
-      .getOrElse(Map.empty)
-
     EarlybirdRequestUtil.getTweetsRequest(
       userId = Some(query.getRequiredUserId),
       clientId = clientId,
       skipVeryRecentTweets = true,
-      followedUserIds = followedUserIds,
+      queryUserIds = queryUserIds,
       retweetsMutedUserIds = Set.empty,
       beforeTweetIdExclusive = Some(toTweetIdExclusive),
       afterTweetIdExclusive = Some(fromTweetIdExclusive),
       excludedTweetIds = excludedTweetIds.map(_.toSet),
-      maxCount = maxCount,
+      maxCount = maxTweetsToFetch,
       tweetTypes = TweetTypes.fromTweetKindOption(tweetKindOptions),
-      authorScoreMap = Some(authorScoreMap),
-      tensorflowModel = tensorflowModel
+      authorScoreMap = authorScoreMap,
+      tensorflowModel = getTensorflowModel(query),
+      enableExcludeSourceTweetIdsQuery = enableExcludeSourceTweetIdsQuery,
+      isVideoOnlyRequest = isVideoOnlyRequest,
+      getOlderTweets = getOlderTweets,
+      isRecency = isRecency,
     )
   }
 }
